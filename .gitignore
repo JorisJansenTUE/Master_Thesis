@@ -1,0 +1,39 @@
+# Python
+
+**pycache**/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.env
+
+# Jupyter
+
+.ipynb_checkpoints/
+
+# MATSim outputs
+
+matsim/output/
+*.log
+
+# Data (keep structure, ignore large/raw files)
+
+data/osm/*.pbf
+data/matsim/output/
+
+# LaTeX
+
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+
+# OS / Editor
+
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
