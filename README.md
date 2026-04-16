@@ -7,48 +7,36 @@ This repository contains a minimal working setup for my master thesis, which wil
 * MATSim simulations
 * Python Surrogate Modelling
 * Python Data preprocessing
-* LaTeX paper with Zotero-based references
 
 
 __!! WIP !!__
 
 ## Quick Start
 
-### 1. Python setup
-
+### 1. Conda Environment setup
+In powershell run once:
 ```bash
-pip install -r requirements.txt
+conda env create -f environment.yml
+```
+Then to activate the environment run:
+```bash
+conda activate thesis
 ```
 
 ### 2. Extract OSM data (Locarno example)
-
-```python
-from pyrosm import OSM
-
-bbox = [8.65, 46.05, 9.05, 46.35]
-osm = OSM("switzerland-latest.osm.pbf", bounding_box=bbox)
-osm.to_xml("data/osm/locarno.osm")
+OSM Data used for the network structure was taken from Geofabrik (https://download.geofabrik.de/europe/switzerland.html). The actual research area (Locarno in our case) can then be extracted by running osmium through powershell:
+```bash
+osmium extract `
+  --bbox 8.65,46.05,9.05,46.35 `
+  --set-bounds `
+  -o data/osm/locarno.osm.pbf `
+  data/osm/switzerland.osm.pbf
 ```
-
+The bounding box can be determined using osm.org
 ### 3. MATSim
 
 * Convert `.osm` → `network.xml`
 * Run simulation from `/matsim/`
-
----
-
-## Paper
-
-* Located in `/paper/`
-* Compile with:
-
-```bash
-latexmk -pdf main.tex
-```
-
-### Zotero
-
-* Export library to `/paper/references.bib` (Better BibTeX auto-export recommended)
 
 ---
 
