@@ -16,10 +16,9 @@ venv/
 matsim/output/
 *.log
 
-# Data (keep structure, ignore large/raw files)
+# Data ( ignore large/raw files) -> might change this later
 
-data/osm/*.pbf
-data/matsim/output/
+data/
 
 # LaTeX
 

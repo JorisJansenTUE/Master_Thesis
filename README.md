@@ -32,7 +32,13 @@ osmium extract `
   -o data/osm/locarno.osm.pbf `
   data/osm/switzerland.osm.pbf
 ```
-The bounding box can be determined using osm.org
+The bounding box can be determined using XXX
+To convert this `.osm.pbf` to a MatSim ready `.xml` we use `MATSim/matsim-example-project/src/java/thesis/network/CreateNetwork.java` but we first need to run the following osmium command to decompress the osm file:
+``` bash
+osmium cat data/osm/locarno.osm.pbf -o data/osm/locarno.osm
+cd MATSim/matsim-example-project
+mvn exec:java "-Dexec.mainClass=thesis.network.CreateNetwork"
+```
 ### 3. MATSim
 
 * Convert `.osm` → `network.xml`
