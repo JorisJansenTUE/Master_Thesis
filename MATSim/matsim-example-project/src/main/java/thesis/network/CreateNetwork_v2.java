@@ -28,9 +28,8 @@ import java.util.Set;
  */
 public class CreateNetwork_v2 {
 
-	private static String UTM32nAsEpsg = "EPSG:25832";
-	private static Path input = Paths.get("/path/to/your/input/data.osm.pbf");
-	private static Path filterShape = Paths.get("/path/to/your/filter/shape-file.shp");
+	private static Path input = Paths.get("../../data/osm/Locarno.osm.pbf");
+	private static Path filterShape = Paths.get("../../data/osm/shapes/Locarno_QGIS_2056.shp");
 
 	public static void main(String[] args) throws MalformedURLException {
 		new CreateNetwork_v2().create();
@@ -38,11 +37,8 @@ public class CreateNetwork_v2 {
 
 	private void create() throws MalformedURLException {
 
-		// choose an appropriate coordinate transformation. OSM Data is in WGS84. When working in central Germany,
-		// EPSG:25832 or EPSG:25833 as target system is a good choice
-		CoordinateTransformation transformation = TransformationFactory.getCoordinateTransformation(
-				TransformationFactory.WGS84, UTM32nAsEpsg
-		);
+		// choose an appropriate coordinate transformation. OSM Data is in WGS84. When working in Switzerland, CH1903_LV03_Plus is a good choice
+		CoordinateTransformation transformation = TransformationFactory.getCoordinateTransformation(TransformationFactory.WGS84, TransformationFactory.CH1903_LV03_Plus);
 
 		// load the geometries of the shape file, so they can be used as a filter during network creation
 		// using PreparedGeometry instead of Geometry increases speed a lot (usually)
@@ -78,6 +74,7 @@ public class CreateNetwork_v2 {
 		new NetworkCleaner().run(network);
 
 		// write out the network into a file
-		new NetworkWriter(network).write("/path/to/your/output/network.xml.gz");
+		new NetworkWriter(network).write("../../data/network/locarno_QGIS.xml");
 	}
 }
+
