@@ -151,6 +151,12 @@
 			<artifactId>vsp</artifactId>
 			<version>${matsim.version}</version>
 		</dependency>
+		<!--added by me-->
+		<dependency>
+    		<groupId>org.matsim</groupId>
+    		<artifactId>pt2matsim</artifactId>
+    		<version>26.4</version>
+		</dependency>
 <!--		<dependency>-->
 <!--			<groupId>org.matsim.contrib</groupId>-->
 <!--			<artifactId>simwrapper</artifactId>-->

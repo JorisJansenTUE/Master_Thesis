@@ -31,6 +31,7 @@ dependencies:
 
   # OSM extraction tool
   - osmium-tool
+  - pyosmium
 
   # Utilities
   - jupyter
