@@ -219,6 +219,7 @@ def extract_gtfs_routes_through_area(
     print("Trips kept:", len(filtered_trips))
     print("Routes kept:", len(filtered_routes))
 
+
 def gtfs_stops_to_gpkg(gtfs_folder, output_file):
     """
     Extracts GTFS stops and saves them as a GeoPackage layer useful for visualizing GTFS routes in QGIS or similar tools.
