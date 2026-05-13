@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE config SYSTEM "http://www.matsim.org/files/dtd/config_v2.dtd">
+
+<config>
+  <module name="PublicTransitMapping">
+
+    <param name="inputNetworkFile" value="../../data/network/locarno_multimodal_v1.xml.gz" />
+    <param name="inputScheduleFile" value="../../data/pt/locarno_transitSchedule.xml.gz" />
+
+    <param name="outputNetworkFile" value="../../data/network/locarno_multimodal_pt_mapped.xml.gz" />
+    <param name="outputScheduleFile" value="../../data/pt/locarno_transitSchedule_mapped.xml.gz" />
+
+    <param name="modesToKeepOnCleanUp" value="car,bike" />
+    <param name="removeNotUsedStopFacilities" value="true" />
+
+    <param name="travelCostType" value="linkLength" />
+    <param name="networkRouter" value="SpeedyALT" />
+    <param name="numOfThreads" value="4" />
+
+    <param name="nLinkThreshold" value="8" />
+    <param name="maxLinkCandidateDistance" value="90.0" />
+    <param name="candidateDistanceMultiplier" value="1.6" />
+    <param name="maxTravelCostFactor" value="5.0" />
+
+    <parameterset type="transportModeAssignment">
+      <param name="scheduleMode" value="bus" />
+      <param name="networkModes" value="bus,car" />
+    </parameterset>
+
+    <parameterset type="transportModeAssignment">
+      <param name="scheduleMode" value="rail" />
+      <param name="networkModes" value="rail,train" />
+    </parameterset>
+
+    <parameterset type="transportModeAssignment">
+      <param name="scheduleMode" value="funicular" />
+      <param name="networkModes" value="funicular" />
+    </parameterset>
+
+  </module>
+</config>
