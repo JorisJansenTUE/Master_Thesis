@@ -349,6 +349,7 @@ class OSM_TagCounter(osmium.SimpleHandler):
             self.railway_counter[tags['railway']] += 1
 
 if __name__ == "__main__":
+    # ------ Handler for counting OSM tags (e.g. to understand which highway types are present in the area) ------
 
     # osm_file = f"{OSM_DIR}/locarno.osm.pbf"  # <-- change this
 
@@ -362,6 +363,8 @@ if __name__ == "__main__":
     # print("\n=== RAILWAY TAGS ===")
     # for tag, count in handler.railway_counter.most_common():
     #     print(f"{tag:20} {count}")
+
+    # ------ Example usage of GTFS extraction and conversion functions ------
 
     # extract_gtfs_routes_through_area(
     #     gtfs_folder=f"{DATA_DIR}/gtfs/gtfs_swiss_20260422",
