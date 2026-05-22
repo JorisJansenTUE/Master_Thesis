@@ -11,7 +11,6 @@
         <!-- Input and output files should be overwritten by pipeline automatically -->
         <param name="osmFile" value="../../data/osm/locarno_smallest.osm.gz" />
         <param name="outputCoordinateSystem" value="EPSG:2056" />
-        <!-- <param name="outputDetailedLinkGeometryFile" value="../../data/network/locarno_detailedLinkGeometry.csv.gz" />-->
         <param name="outputNetworkFile" value="../../data/network/locarno_multimodal_v1.xml.gz" />
 
         <!-- General parameters -->
