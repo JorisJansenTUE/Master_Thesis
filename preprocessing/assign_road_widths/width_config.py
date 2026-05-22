@@ -30,11 +30,11 @@ class WidthEstimationConfig:
     source_crs: str = "EPSG:4326"   # OSM lon/lat
     target_crs: str = "EPSG:2056"   # Swiss LV95, metres
 
-    sample_spacing_m: float = 15.0
-    transect_length_m: float = 40.0
+    sample_spacing_m: float = 10.0
+    transect_length_m: float = 25.0
 
     min_width_m: float = 1.0
-    max_width_m: float = 25.0
+    max_width_m: float = 22.0
 
     large_width_threshold_m: float = 12.0
     small_width_threshold_m: float = 2.5

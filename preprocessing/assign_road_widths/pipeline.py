@@ -177,7 +177,7 @@ def main() -> None:
             r"C:\Users\20201733\Documents\Thesis\Data\locarno_cadastral_clipped.gpkg"
         ),
         output_osm_gz=Path(
-            f"{OSM_DIR}/locarno_smallest_with_widths.osm.gz"
+            f"{OSM_DIR}/w_v2/locarno_smallest_with_widths_v2.osm.gz"
         ),
 
 
@@ -185,9 +185,9 @@ def main() -> None:
 
         # Optional tuning.
         sample_spacing_m=15.0,
-        transect_length_m=40.0,
+        transect_length_m=25.0,
         min_width_m=1.0,
-        max_width_m=25.0,
+        max_width_m=22.0,
     )
 
     workflow = OsmWidthTaggingWorkflow(config)
