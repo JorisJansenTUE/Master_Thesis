@@ -36,6 +36,7 @@ dependencies:
   # Utilities
   - jupyter
   - tqdm
+  - lxml
 
   # Pip fallback for packages not in conda
   - pip
@@ -46,6 +47,8 @@ dependencies:
 
       # Optimization / surrogate modelling
       - scikit-optimize
+
+
 
       # (optional, install later if needed)
       # PyTorch Geometric stack (often easier to install manually)
