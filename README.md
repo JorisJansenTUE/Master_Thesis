@@ -23,55 +23,32 @@ Then to activate the environment run:
 conda activate thesis
 ```
 
-### 2. Extract OSM data (Locarno example)
-OSM Data used for the network structure was taken from Geofabrik (https://download.geofabrik.de/europe/switzerland.html). The actual research area (Locarno in our case) can then be extracted by running osmium through powershell:
-```bash
-osmium extract `
-  --bbox 8.65,46.05,9.05,46.35 `
-  --set-bounds `
-  -o data/osm/locarno.osm.pbf `
-  data/osm/switzerland.osm.pbf
-```
-The bounding box can be determined using XXX
+### 2. Creating a MATSim Network (Locarno Example)
+OSM Data used for the network structure was taken from [Geofabrik](https://download.geofabrik.de/europe/switzerland.html).   
+GTFS data was downloaded from [Geodienste](https://data.opentransportdata.swiss/en/dataset/timetable-2026-gtfs2020)  
+The Project boundary shape was drawn in QGIS.
 
-Next we require a more detailed specification of the studied research area as a shapefile. One could decide to use administrative borders for this and extract them using the function `Get_Shapefile` in `preprocessing.data_helperfunctions.py` but for our scenario this is not ideal and thus a shape was drawn manually in QGIS and exported:
+The Network is then created using the pipeline as found in `preprocessing/network`. Run the pipeline as a python module from the repository root:
 
-<include figure
+```powershell
+python -m preprocessing.network.pipeline `
+  --scenario locarno `
+  --osm data/raw/osm/Switzerland-260413 `
+  --shape data/raw/shapes/Locarno_QGIS_2056.shp `
+  --gtfs data/raw/gtfs/gtfs_swiss_20260422.zip `
+  --sample-day 20260422 `
+  --additional-line-info schedule `
+  --overwrite
+```  
+Check the README in the module folder for more specific information about the pipeline.
 
-### 3. MATSim
-The following Tutorials were used to create all java code in the thesis project folder:
+#### Additional features to be added:
+- Add compatibility with `preprocessing/assign_road_widths` 
+- Add additional heuristic after network creation that compares generated max speed with max speed in OSM and overwrites with the OSM speed when not equal.
+- Refine which road types to keep and which not (e.g. include service roads or not?)
+- Refine where bicycles should be allowed
 
-CreateNetwork_v2:\
-https://github.com/matsim-org/matsim-code-examples/blob/dev.x/src/main/java/org/matsim/codeexamples/network/RunCreateNetworkFromOSM.java 
-
-CreatePopulation (with modification):\
-https://github.com/matsim-org/matsim-code-examples/blob/dev.x/src/main/java/org/matsim/codeexamples/population/demandGenerationFromShapefile/CreateDemand.java
-
----
-To convert the extracted OSM file `.osm.pbf` to a MatSim ready `.xml` we use `MATSim/matsim-example-project/src/java/thesis/network/CreateNetwork_v2.java` :
-``` bash
-#osmium cat data/osm/locarno.osm.pbf -o data/osm/locarno.osm => only when using V1
-cd MATSim/matsim-example-project
-mvn exec:java "-Dexec.mainClass=thesis.network.CreateNetwork_v2"
-```
-Next we can use the created network file and shape file to create a randomly sampled population using `CreateSyntheticPopulationFromShapefile.java`. \
-Run the following:
-
-```bash
-cd MATSim/matsim-example-project
-mvn exec:java "-Dexec.mainClass=thesis.population.CreateSyntheticPopulationFromShapefile"
-```
-
-New version WIP:"
-```bash
-osmium extract `                  
-  -p data/osm/locarno_QGIS_drawn.geojson `                                                     
-  -o data/osm/locarno_smallest.osm.pbf `
-  data/osm/locarno.osm.pbf
-osmium cat ../../data/osm/locarno_smallest.osm.pbf -o ../../data/osm/locarno_smallest.osm.gz
-mvn exec:java "-Dexec.mainClass=org.matsim.pt2matsim.run.Osm2MultimodalNetwork" "-Dexec.args=scenarios/input_config/multi_modal.xml"
-
-```
+### 3. Creating a Synthetic Population
 
 ## Notes
 

@@ -165,3 +165,10 @@ All output files will be written to two folders:
 
 - `data/interim/scenario_name`: Includes the clipped OSM and GTFS and the reprojected WSG84 boundary 
 - `data/scenarios/scenario_name`: Includes all files required for MATSim simulations (Network, Schedule, Vehicles), generated config files used by PT2Matsim and logs of the pipeline.
+
+## Notes
+Some functions and refinements are still wip:
+- Add compatibility with `preprocessing/assign_road_widths` 
+- Add additional heuristic after network creation that compares generated max speed with max speed in OSM and overwrites with the OSM speed when not equal.
+- Refine which road types to keep and which not (e.g. include service roads or not?)
+- Refine where bicycles should be allowed
