@@ -10,6 +10,19 @@ This repository contains a minimal working setup for my master thesis, which wil
 
 
 __!! WIP !!__
+## Data used:
+- Municipal Boundaries from Swissboundaries3d 
+- Project boundary (set of Municipal boundaries created with `create_project_boundary.py`)
+- OSM extract of Switzerland
+- Cadastral Data
+- GTFS Data
+- STATPop Ha Level
+- STATEnt Ha Level
+- OD Commuter Matrix of Switzerland
+- Modal Splits??? -> Not yet
+
+> **Note:** Need to add where to download and check if everything is in the Git folder structure
+
 
 ## Quick Start
 
@@ -52,5 +65,4 @@ Check the README in the module folder for more specific information about the pi
 
 ## Notes
 
-* Initial version is road-only
 * Will be expanded later
