@@ -44,6 +44,53 @@ GAP_FILL_MIN_NEIGHBOURS = 5
 
 USE_QUEEN_CONTIGUITY = False  # If True, use 8-neighbour contiguity. If False, use 4-neighbour contiguity.
 
+# Administrative boundary steps
+#--------------------------------
+ADMIN_GPKG = Path(r"C:\Users\20201733\Downloads\swissboundaries3d_2026-01_2056_5728.gpkg.zip")
+
+
+# Names as found in swissBOUNDARIES3D municipality layer, could differ per version
+ADMIN_LAYER = "TLM_HOHEITSGEBIET"
+
+ADMIN_ID_COL = "bfs_nummer"
+ADMIN_NAME_COL = "name_1"
+
+# Which classified grid cells define the local centre?
+# Options from your script include:
+#   "is_urban_cluster" 
+#   "urban_cluster_candidate"
+#   "urban_centre_candidate"
+#   "is_urban_centre" -> Most inline with the Eurostat definition, but may need to be adapted for the Locarnese case.
+CENTER_CELL_COL = "is_urban_centre" 
+
+# Eurostat city rule: LAU is assigned to city/centre if >= 50% of population
+# lives in the urban centre.
+ADMIN_ASSIGNMENT_THRESHOLD = 0.50
+
+OUTPUT_ADMIN_PNG = Path(f"{RAW_DIR}/clusters/statpop_admin_assignment.png")
+
+# Comutting Zone Settings
+# --------------------------------
+COMMUTING_CSV = Path(r"C:\Users\20201733\Downloads\employed_persons.csv")
+
+# Column names as found in BFS commuting CSV, could differ per version
+COMMUTING_RESIDENCE_COL = "geo_comm_resid"
+COMMUTING_WORK_COL = "geo_comm_work"
+COMMUTING_YEAR_COL = "ref_year"
+COMMUTING_COUNT_COL = "value"
+COMMUTING_PERSPECTIVE_COL = "perspective"
+
+COMMUTING_YEAR = 2020       #Other options in found data file are 2018 or 2014
+
+#Eurostat commuting zone rule: LAU is assigned to commuting zone if >= 15% of employed residents commute to the centre.
+COMMUTING_THRESHOLD = 0.15 
+
+#Determine which perspective to use. 
+#If the CSV contains both residence and work perspectives, use residence perspective
+#Avoid double counting and is inline with Eurostat.
+COMMUTING_PERSPECTIVE_VALUE = "R"
+OUTPUT_FUA_PNG = Path(f"{RAW_DIR}/clusters/statpop_fua_assignment.png")
+
 
 # =============================================================================
 # LOADING
@@ -113,6 +160,84 @@ def load_study_extent_as_bbox(path: Path, target_crs: str = INPUT_CRS) -> gpd.Ge
 
     return bbox
 
+def load_admin_boundaries(
+    path: Path,
+    layer: str,
+    study_extent: gpd.GeoDataFrame,
+    target_crs: str = INPUT_CRS,
+) -> gpd.GeoDataFrame:
+    """
+    Load local administrative boundaries from swissBOUNDARIES3D.
+
+    The layer is clipped to the study extent bounding box for efficiency.
+    """
+
+    if not path.exists():
+        raise FileNotFoundError(f"Administrative boundary file not found: {path}")
+
+    admin = gpd.read_file(path, layer=layer)
+
+    if admin.crs is None:
+        raise ValueError("Administrative boundary layer has no CRS.")
+    
+    admin.columns = admin.columns.str.lower()
+    admin = admin.to_crs(target_crs)
+
+    # Keep only boundaries intersecting the study extent
+    admin = gpd.overlay(
+        admin,
+        study_extent.to_crs(target_crs),
+        how="intersection",
+        keep_geom_type=True,
+    )
+
+    if ADMIN_ID_COL not in admin.columns:
+        raise ValueError(
+            f"Missing ADMIN_ID_COL '{ADMIN_ID_COL}'. "
+            f"Available columns are:\n{list(admin.columns)}"
+        )
+
+    if ADMIN_NAME_COL not in admin.columns:
+        raise ValueError(
+            f"Missing ADMIN_NAME_COL '{ADMIN_NAME_COL}'. "
+            f"Available columns are:\n{list(admin.columns)}"
+        )
+
+    admin = admin[[ADMIN_ID_COL, ADMIN_NAME_COL, "geometry"]].copy()
+
+    return admin
+
+def load_commuting_csv(path: Path) -> pd.DataFrame:
+    """
+    Load BFS residence-work commuting matrix.
+
+    Expected structure:
+        one row per residence municipality, work municipality, year
+        with a commuter/employed-person count.
+    """
+
+    if not path.exists():
+        raise FileNotFoundError(f"Commuting CSV not found: {path}")
+
+    df = pd.read_csv(
+        path,
+        sep=",",
+        quotechar='"',
+        encoding="utf-8",
+    )
+
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.replace('"', "", regex=False)
+        .str.lower()
+    )
+
+    print("Available commuting columns:")
+    print(df.columns.tolist())
+
+    return df
+
 
 # =============================================================================
 # GRID CREATION
@@ -155,14 +280,14 @@ def prepare_statpop_grid_table(statpop: pd.DataFrame) -> pd.DataFrame:
     Convert STATPOP coordinate rows to grid indices.
 
 
-    Note: E_KOORD and N_KOORD are upper-right coordinates of the 100 m cell, should be shifted.
+    Note: E_KOORD and N_KOORD are bottom-left coordinates of the 100 m cell
     """
 
     df = statpop.copy()
 
-    #shift to bottom-left corner and convert to grid indices
-    df["grid_x"] = df[X_COL].astype(int)-100
-    df["grid_y"] = df[Y_COL].astype(int)-100
+    #convert to grid indices
+    df["grid_x"] = df[X_COL].astype(int)
+    df["grid_y"] = df[Y_COL].astype(int)
     df["population"] = df[POP_COL].fillna(0)
 
     return df[["grid_x", "grid_y", "population"]]
@@ -479,6 +604,292 @@ def classify_cluster_type(
 
     return grid
 
+# =============================================================================
+# Administrative Area Assignment
+# =============================================================================
+
+def assign_grid_cells_to_admin(
+    grid: gpd.GeoDataFrame,
+    admin: gpd.GeoDataFrame,
+) -> gpd.GeoDataFrame:
+    """
+    Assign each 1 ha grid cell to an administrative unit using its centroid.
+    """
+
+    grid = grid.copy()
+
+    if grid.crs != admin.crs:
+        admin = admin.to_crs(grid.crs)
+
+    centroids = grid.copy()
+    centroids["geometry"] = centroids.geometry.centroid
+
+    joined = gpd.sjoin(
+        centroids,
+        admin[[ADMIN_ID_COL, ADMIN_NAME_COL, "geometry"]],
+        how="left",
+        predicate="within",
+    )
+
+    grid[ADMIN_ID_COL] = joined[ADMIN_ID_COL].values
+    grid[ADMIN_NAME_COL] = joined[ADMIN_NAME_COL].values
+
+    return grid
+
+def classify_admin_units_by_centre_share(
+    grid: gpd.GeoDataFrame,
+    admin: gpd.GeoDataFrame,
+    centre_cell_col: str = CENTER_CELL_COL,
+    threshold: float = ADMIN_ASSIGNMENT_THRESHOLD,
+) -> gpd.GeoDataFrame:
+    """
+    Assign administrative units to the local centre based on the share of their
+    population living in centre grid cells.
+
+    This follows the Eurostat logic:
+        LAU is part of the city if at least 50% of its population lives
+        in the urban centre.
+
+    For the Locarnese case, centre_cell_col can be adapted because the area may
+    not meet the formal 50,000-person urban-centre threshold.
+    """
+
+    if centre_cell_col not in grid.columns:
+        raise ValueError(
+            f"Missing centre cell column '{centre_cell_col}'. "
+            f"Available columns are:\n{list(grid.columns)}"
+        )
+
+    grid = grid.copy()
+
+    if ADMIN_ID_COL not in grid.columns:
+        raise ValueError(
+            "Grid cells have not yet been assigned to administrative units. "
+            "Run assign_grid_cells_to_admin() first."
+        )
+
+    grid["centre_population"] = np.where(
+        grid[centre_cell_col],
+        grid["population"],
+        0,
+    )
+
+    pop_by_admin = (
+        grid.dropna(subset=[ADMIN_ID_COL])
+        .groupby(ADMIN_ID_COL)
+        .agg(
+            total_population=("population", "sum"),
+            centre_population=("centre_population", "sum"),
+        )
+        .reset_index()
+    )
+
+    pop_by_admin["centre_population_share"] = np.where(
+        pop_by_admin["total_population"] > 0,
+        pop_by_admin["centre_population"] / pop_by_admin["total_population"],
+        0,
+    )
+
+    pop_by_admin["assigned_to_centre"] = (
+        pop_by_admin["centre_population_share"] >= threshold
+    )
+
+    admin_out = admin.merge(
+        pop_by_admin,
+        on=ADMIN_ID_COL,
+        how="left",
+    )
+
+    admin_out["total_population"] = admin_out["total_population"].fillna(0)
+    admin_out["centre_population"] = admin_out["centre_population"].fillna(0)
+    admin_out["centre_population_share"] = admin_out["centre_population_share"].fillna(0)
+    admin_out["assigned_to_centre"] = admin_out["assigned_to_centre"].fillna(False)
+
+    return admin_out
+
+# =============================================================================
+# Commuting Zone and FUA Assignment
+# =============================================================================
+
+def prepare_commuting_table(
+    commuting_raw: pd.DataFrame,
+    residence_col: str = COMMUTING_RESIDENCE_COL,
+    work_col: str = COMMUTING_WORK_COL,
+    count_col: str = COMMUTING_COUNT_COL,
+    year_col: str = COMMUTING_YEAR_COL,
+    year: int = COMMUTING_YEAR,
+    perspective_col: str = COMMUTING_PERSPECTIVE_COL,
+    perspective_value: str | None = None,
+) -> pd.DataFrame:
+    """
+    Prepare BFS residence-work commuting matrix.
+
+    Returns a clean table with:
+        residence_bfs, work_bfs, commuters
+
+    Notes:
+        - Uses the residence perspective if perspective_value is provided.
+        - Drops grouped 'other communes' / 'other cantons' rows by requiring
+          numeric commune IDs.
+    """
+
+    df = commuting_raw.copy()
+
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.replace('"', "", regex=False)
+        .str.lower()
+    )
+
+    required_cols = [residence_col, work_col, count_col, year_col]
+    missing = [col for col in required_cols if col not in df.columns]
+
+    if missing:
+        raise ValueError(
+            f"Missing commuting columns: {missing}\n"
+            f"Available columns are:\n{list(df.columns)}"
+        )
+
+    # Filter year
+    df[year_col] = pd.to_numeric(df[year_col], errors="coerce")
+    df = df[df[year_col] == year].copy()
+
+    # Filter residence/work perspective if requested
+    if perspective_value is not None:
+        if perspective_col not in df.columns:
+            raise ValueError(
+                f"Missing perspective column '{perspective_col}'. "
+                f"Available columns are:\n{list(df.columns)}"
+            )
+
+        df[perspective_col] = df[perspective_col].astype(str).str.strip()
+        df = df[df[perspective_col] == perspective_value].copy()
+
+    out = df[[residence_col, work_col, count_col]].copy()
+
+    out = out.rename(
+        columns={
+            residence_col: "residence_bfs",
+            work_col: "work_bfs",
+            count_col: "commuters",
+        }
+    )
+
+    # Convert to numeric. Grouped categories such as "other communes" become NaN.
+    out["residence_bfs"] = pd.to_numeric(out["residence_bfs"], errors="coerce")
+    out["work_bfs"] = pd.to_numeric(out["work_bfs"], errors="coerce")
+    out["commuters"] = pd.to_numeric(out["commuters"], errors="coerce").fillna(0)
+
+    # Remove grouped / non-municipality rows
+    out = out.dropna(subset=["residence_bfs", "work_bfs"])
+
+    out["residence_bfs"] = out["residence_bfs"].astype(int)
+    out["work_bfs"] = out["work_bfs"].astype(int)
+
+    # If duplicate rows exist, aggregate them
+    out = (
+        out.groupby(["residence_bfs", "work_bfs"], as_index=False)
+        .agg(commuters=("commuters", "sum"))
+    )
+
+    return out
+
+
+def add_commuting_zone_assignment(
+    admin_assigned: gpd.GeoDataFrame,
+    commuting: pd.DataFrame,
+    admin_id_col: str = ADMIN_ID_COL,
+    threshold: float = COMMUTING_THRESHOLD,
+) -> gpd.GeoDataFrame:
+    """
+    Add commuting-zone and FUA classification to administrative units.
+
+    Assumes admin_assigned already contains:
+        assigned_to_centre
+
+    Creates:
+        employed_residents
+        commuters_to_centre
+        share_to_centre
+        assigned_to_commuting_zone
+        assigned_to_fua
+    """
+
+    admin = admin_assigned.copy()
+
+    if "assigned_to_centre" not in admin.columns:
+        raise ValueError(
+            "admin_assigned must contain 'assigned_to_centre'. "
+            "Run classify_admin_units_by_centre_share() first."
+        )
+
+    city_ids = set(
+        admin.loc[admin["assigned_to_centre"], admin_id_col]
+        .dropna()
+        .astype(int)
+        .tolist()
+    )
+
+    if not city_ids:
+        raise ValueError(
+            "No administrative units are assigned to the centre. "
+            "Cannot compute commuting zone."
+        )
+
+    commuting = commuting.copy()
+    commuting["residence_bfs"] = commuting["residence_bfs"].astype(int)
+    commuting["work_bfs"] = commuting["work_bfs"].astype(int)
+
+    total_by_residence = (
+        commuting
+        .groupby("residence_bfs", as_index=False)
+        .agg(employed_residents=("commuters", "sum"))
+    )
+
+    to_centre_by_residence = (
+        commuting[commuting["work_bfs"].isin(city_ids)]
+        .groupby("residence_bfs", as_index=False)
+        .agg(commuters_to_centre=("commuters", "sum"))
+    )
+
+    shares = total_by_residence.merge(
+        to_centre_by_residence,
+        on="residence_bfs",
+        how="left",
+    )
+
+    shares["commuters_to_centre"] = shares["commuters_to_centre"].fillna(0)
+
+    shares["share_to_centre"] = np.where(
+        shares["employed_residents"] > 0,
+        shares["commuters_to_centre"] / shares["employed_residents"],
+        0,
+    )
+
+    admin = admin.merge(
+        shares,
+        left_on=admin_id_col,
+        right_on="residence_bfs",
+        how="left",
+    )
+
+    admin["employed_residents"] = admin["employed_residents"].fillna(0)
+    admin["commuters_to_centre"] = admin["commuters_to_centre"].fillna(0)
+    admin["share_to_centre"] = admin["share_to_centre"].fillna(0)
+
+    admin["assigned_to_commuting_zone"] = (
+        (~admin["assigned_to_centre"])
+        & (admin["share_to_centre"] >= threshold)
+    )
+
+    admin["assigned_to_fua"] = (
+        admin["assigned_to_centre"]
+        | admin["assigned_to_commuting_zone"]
+    )
+
+    return admin
+
 
 # =============================================================================
 # PLOTTING
@@ -553,7 +964,7 @@ def plot_clusters(grid: gpd.GeoDataFrame, study_extent: gpd.GeoDataFrame, output
     )
 
     legend_handles = [
-        Patch(facecolor="red", label="Urban centre cluster ≥ 50,000 pop"),
+        Patch(facecolor="red", label="Urban centre cluster ≥ 25,000 pop"),
         Patch(facecolor="orange", label="Local 1 km² pop ≥ 1,500"),
         Patch(facecolor="royalblue", label="Urban cluster ≥ 5,000 pop"),
         Patch(facecolor="lightskyblue", label="Local 1 km² pop ≥ 300"),
@@ -580,6 +991,184 @@ def plot_clusters(grid: gpd.GeoDataFrame, study_extent: gpd.GeoDataFrame, output
     plt.savefig(output_png, dpi=300)
     plt.close()
 
+def plot_admin_assignment(
+    grid: gpd.GeoDataFrame,
+    admin: gpd.GeoDataFrame,
+    study_extent: gpd.GeoDataFrame,
+    output_png: Path,
+    centre_cell_col: str = CENTER_CELL_COL,
+) -> None:
+    """
+    Plot administrative units assigned to the local centre.
+    """
+
+    output_png.parent.mkdir(parents=True, exist_ok=True)
+
+    grid_web = grid.to_crs(epsg=3857)
+    admin_web = admin.to_crs(epsg=3857)
+    extent_web = study_extent.to_crs(epsg=3857)
+
+    fig, ax = plt.subplots(figsize=(11, 11))
+
+    # Assigned administrative units
+    admin_web[~admin_web["assigned_to_centre"]].plot(
+        ax=ax,
+        color="lightgrey",
+        edgecolor="white",
+        linewidth=0.6,
+        alpha=0.35,
+    )
+
+    admin_web[admin_web["assigned_to_centre"]].plot(
+        ax=ax,
+        color="lightskyblue",
+        edgecolor="black",
+        linewidth=1.0,
+        alpha=0.55,
+    )
+
+    # Centre grid cells
+    grid_web[grid_web[centre_cell_col]].plot(
+        ax=ax,
+        color="red",
+        edgecolor="none",
+        alpha=0.65,
+    )
+
+    # Administrative boundaries
+    admin_web.boundary.plot(
+        ax=ax,
+        color="black",
+        linewidth=0.5,
+        alpha=0.8,
+    )
+
+    # Study extent
+    extent_web.boundary.plot(
+        ax=ax,
+        color="black",
+        linewidth=1.2,
+        alpha=0.9,
+    )
+
+    ctx.add_basemap(
+        ax,
+        source=ctx.providers.OpenStreetMap.Mapnik,
+        alpha=0.7,
+    )
+
+    legend_handles = [
+        Patch(facecolor="red", label=f"Centre cells: {centre_cell_col}"),
+        Patch(facecolor="lightskyblue", edgecolor="black", label="Administrative unit assigned to centre"),
+        Patch(facecolor="lightgrey", edgecolor="white", label="Other administrative unit"),
+        Patch(facecolor="none", edgecolor="black", label="Study extent"),
+    ]
+
+    ax.legend(
+        handles=legend_handles,
+        loc="upper right",
+        frameon=True,
+        framealpha=0.9,
+    )
+
+    ax.set_title(
+        "Administrative units assigned to the Locarnese centre",
+        fontsize=14,
+    )
+
+    ax.set_axis_off()
+
+    plt.tight_layout()
+    plt.savefig(output_png, dpi=300)
+    plt.close()
+
+def plot_fua_assignment(
+    admin_fua: gpd.GeoDataFrame,
+    study_extent: gpd.GeoDataFrame,
+    output_png: Path,
+) -> None:
+    """
+    Plot adapted city, commuting zone, and resulting FUA.
+    """
+
+    output_png.parent.mkdir(parents=True, exist_ok=True)
+
+    admin_web = admin_fua.to_crs(epsg=3857)
+    extent_web = study_extent.to_crs(epsg=3857)
+
+    fig, ax = plt.subplots(figsize=(11, 11))
+
+    # Other municipalities
+    admin_web[~admin_web["assigned_to_fua"]].plot(
+        ax=ax,
+        color="lightgrey",
+        edgecolor="white",
+        linewidth=0.6,
+        alpha=0.35,
+    )
+
+    # Commuting zone
+    admin_web[admin_web["assigned_to_commuting_zone"]].plot(
+        ax=ax,
+        color="lightskyblue",
+        edgecolor="black",
+        linewidth=0.8,
+        alpha=0.6,
+    )
+
+    # City / centre municipalities
+    admin_web[admin_web["assigned_to_centre"]].plot(
+        ax=ax,
+        color="red",
+        edgecolor="black",
+        linewidth=1.0,
+        alpha=0.75,
+    )
+
+    admin_web.boundary.plot(
+        ax=ax,
+        color="black",
+        linewidth=0.5,
+        alpha=0.8,
+    )
+
+    extent_web.boundary.plot(
+        ax=ax,
+        color="black",
+        linewidth=1.2,
+        alpha=0.9,
+    )
+
+    ctx.add_basemap(
+        ax,
+        source=ctx.providers.OpenStreetMap.Mapnik,
+        alpha=0.7,
+    )
+
+    legend_handles = [
+        Patch(facecolor="red", edgecolor="black", label="Adapted Locarnese centre"),
+        Patch(facecolor="lightskyblue", edgecolor="black", label="Commuting zone ≥ 15%"),
+        Patch(facecolor="lightgrey", edgecolor="white", label="Outside adapted FUA"),
+        Patch(facecolor="none", edgecolor="black", label="Study extent"),
+    ]
+
+    ax.legend(
+        handles=legend_handles,
+        loc="upper right",
+        frameon=True,
+        framealpha=0.9,
+    )
+
+    ax.set_title(
+        "Adapted Locarnese functional urban area",
+        fontsize=14,
+    )
+
+    ax.set_axis_off()
+
+    plt.tight_layout()
+    plt.savefig(output_png, dpi=300)
+    plt.close()
 
 # =============================================================================
 # MAIN
@@ -628,6 +1217,68 @@ def main() -> None:
 
     print("\nDone.")
     print(f"Map written to: {OUTPUT_PNG}")
+
+    print("Loading administrative boundaries...")
+    admin = load_admin_boundaries(
+        ADMIN_GPKG,
+        ADMIN_LAYER,
+        study_extent,
+    )
+
+    print("Assigning 1 ha cells to administrative units...")
+    grid = assign_grid_cells_to_admin(
+        grid,
+        admin,
+    )
+
+    print("Classifying administrative units by centre population share...")
+    admin_assigned = classify_admin_units_by_centre_share(
+        grid,
+        admin,
+        centre_cell_col=CENTER_CELL_COL,
+        threshold=ADMIN_ASSIGNMENT_THRESHOLD,
+    )
+
+    print("Creating administrative assignment map...")
+    plot_admin_assignment(
+        grid,
+        admin_assigned,
+        study_extent,
+        OUTPUT_ADMIN_PNG,
+        centre_cell_col=CENTER_CELL_COL,
+    )
+
+    print(f"Administrative assignment map written to: {OUTPUT_ADMIN_PNG}")
+
+    print("Loading commuting data...")
+    commuting_raw = load_commuting_csv(COMMUTING_CSV)
+
+    print("Preparing commuting matrix...")
+    commuting = prepare_commuting_table(
+        commuting_raw,
+        residence_col=COMMUTING_RESIDENCE_COL,
+        work_col=COMMUTING_WORK_COL,
+        count_col=COMMUTING_COUNT_COL,
+        year_col=COMMUTING_YEAR_COL,
+        year=COMMUTING_YEAR,
+    )
+
+    print("Assigning commuting zone...")
+    admin_fua = add_commuting_zone_assignment(
+        admin_assigned,
+        commuting,
+        admin_id_col=ADMIN_ID_COL,
+        threshold=COMMUTING_THRESHOLD,
+    )
+
+    print("Creating FUA map...")
+    plot_fua_assignment(
+        admin_fua,
+        study_extent,
+        OUTPUT_FUA_PNG,
+    )
+
+    print(f"FUA map written to: {OUTPUT_FUA_PNG}")
 
 
 if __name__ == "__main__":
