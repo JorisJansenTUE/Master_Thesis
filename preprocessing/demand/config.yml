@@ -1,0 +1,104 @@
+crs: EPSG:2056
+sample_fraction: 0.05
+random_seed: 1234
+
+input:
+  statpop: data/raw/demand_data/STATPOP2024.csv
+  statent: data/raw/demand_data/STATENT_2023.csv
+  municipalities: data/raw/shapes/swissBOUNDARIES3D.gpkg
+  commuter_od: data/raw/demand_data/employed_persons.csv
+  project_boundary: data/raw/shapes/Locarno_project_boundary.shp
+  modal_splits: null
+
+layers:
+  municipalities: tlm_hoheitsgebiet
+
+columns:
+  # STATPOP and STATENT coordinate columns
+  x_col: E_KOORD
+  y_col: N_KOORD
+
+
+  # STATPOP / STATENT value columns
+  statpop_population: BBTOT
+  statent_jobs: B08VZAT
+
+  # Municipality columns from the GPKG
+  municipality_id: bfs_nummer
+  municipality_name: name
+
+  # OD matrix columns
+  od_origin: GEO_COMM_RESID
+  od_destination: GEO_COMM_WORK
+  od_flow: VALUE
+  
+  # Optional modal split columns
+  modal_split_municipality: municipality
+  modal_split_car: car
+  modal_split_pt: pt
+  modal_split_bike: bike
+  modal_split_walk: walk
+
+od_filters:
+    REF_YEAR: 2020
+    PERSPECTIVE: "R"
+
+output:
+  directory: data/scenarios/locarno
+  population: population.xml.gz
+  population_attributes: population_attributes.xml.gz
+
+demand:
+  include_intrazonal: true
+  min_commuters_per_od_after_sampling: 1
+
+time:
+  morning_departure_mean: "07:30:00"
+  morning_departure_std_minutes: 45
+  work_duration_mean_hours: 8.0
+  work_duration_std_minutes: 45
+
+modes:
+  available:
+    - car
+    - pt
+    - bike
+    - walk
+
+  initial_mode_assignment:
+    use_modal_splits: false
+
+    distance_bands:
+      - max_distance_m: 1500
+        probabilities:
+          walk: 0.55
+          bike: 0.2
+          pt: 0.05
+          car: 0.45
+
+      - max_distance_m: 3000
+        probabilities:
+          walk: 0.1
+          bike: 0.15
+          pt: 0.15
+          car: 0.6
+
+      - max_distance_m: 15000
+        probabilities:
+          walk: 0.01
+          bike: 0.1
+          pt: 0.15
+          car: 0.75
+
+      - max_distance_m: 999999
+        probabilities:
+          walk: 0.00
+          bike: 0.01
+          pt: 0.42
+          car: 0.57
+
+person_attributes:
+  car_availability_probability: 0.65
+  bike_availability_probability: 0.75
+  pt_subscription_probability: 0.35
+  license_probability: 0.80
