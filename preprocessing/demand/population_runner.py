@@ -24,6 +24,7 @@ def run(config_path: Path) -> None:
     pop_col = cfg.columns["statpop_population"]
     flow_col = cfg.columns["od_flow"]
 
+    # Perform checks and print summary of population and commuters
     actual_residents = input_data.statpop[pop_col].sum()
     expected_resident_sample = actual_residents * cfg.sample_fraction
 
@@ -53,11 +54,13 @@ def run(config_path: Path) -> None:
 
     writer = MatsimPopulationWriter(persons)
     writer.write_population(population_path)
-    writer.write_attributes(attributes_path)
+
+    # Optionally write person attributes in a separate file (currently not used as the attributes are embedded in the population XML)
+    #writer.write_attributes(attributes_path)
 
     print("\nWritten files:")
     print(f"  {population_path}")
-    print(f"  {attributes_path}")
+    #print(f"  {attributes_path}")
 
 
 def main() -> None:
