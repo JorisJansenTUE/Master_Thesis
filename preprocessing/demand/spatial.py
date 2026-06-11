@@ -43,14 +43,14 @@ def sample_point_from_geometry(geom: BaseGeometry, rng: random.Random) -> Point:
     Sample a point from a geometry.
 
     For STATPOP/STATENT point geometries, this jitters the coordinate within
-    an approximate 100 m x 100 m hectare cell.
-    """
+    an approximate 100 m x 100 m hectare cell. Since the point is the southwest corner of the cell, we add a random positive offset to both x and y coordinates. 
+        """
     if geom.is_empty:
         raise ValueError("Cannot sample from empty geometry.")
 
     if geom.geom_type == "Point":
-        dx = rng.uniform(-50.0, 50.0)
-        dy = rng.uniform(-50.0, 50.0)
+        dx = rng.uniform(0, 100.0)
+        dy = rng.uniform(0, 100.0)
         return Point(geom.x + dx, geom.y + dy)
 
     minx, miny, maxx, maxy = geom.bounds
