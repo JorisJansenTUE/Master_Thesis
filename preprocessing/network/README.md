@@ -119,7 +119,7 @@ Additionally, overrides can also be added as an additional argument to the pipel
 
 ## Usage
 
-Run the pipeline as a python module from the repository root:
+Run the pipeline as a python module from the repository root using something like:
 
 ```powershell
 python -m preprocessing.network.pipeline `
