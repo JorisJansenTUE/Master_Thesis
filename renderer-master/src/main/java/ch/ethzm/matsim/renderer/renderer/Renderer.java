@@ -132,6 +132,122 @@ public class Renderer {
 		}
 	}
 
+	private void drawLegend(Graphics2D graphics) {
+		int padding = 14;
+		int rowHeight = 23;
+
+		int boxWidth = 330;
+		int boxHeight = 175;
+
+		int rightMargin = 20;
+		int bottomMargin = 20;
+
+		int x = windowWidth - boxWidth - rightMargin;
+		int y = windowHeight - boxHeight - bottomMargin;
+
+		// Semi-transparent background
+		graphics.setColor(new Color(255, 255, 255, 235));
+		graphics.fillRoundRect(x, y, boxWidth, boxHeight, 14, 14);
+
+		// Border
+		graphics.setColor(new Color(80, 80, 80));
+		graphics.drawRoundRect(x, y, boxWidth, boxHeight, 14, 14);
+
+		// Title
+		graphics.setFont(new Font(
+				graphics.getFont().getName(),
+				Font.BOLD,
+				16
+		));
+
+		graphics.setColor(Color.BLACK);
+		graphics.drawString("Legend", x + padding, y + 23);
+
+		graphics.setFont(new Font(
+				graphics.getFont().getName(),
+				Font.PLAIN,
+				14
+		));
+
+		// Two-column layout
+		int leftSymbolX = x + padding;
+		int leftTextX = leftSymbolX + 22;
+
+		int rightSymbolX = x + 180;
+		int rightTextX = rightSymbolX + 30;
+
+		int startY = y + 52;
+
+		// -------------------------------------------------------------
+		// Left column: agents and activities
+		// -------------------------------------------------------------
+
+		int leftY = startY;
+
+		// Car
+		graphics.setColor(vehicleColors.get(0));
+		graphics.fillOval(leftSymbolX, leftY - 9, 10, 10);
+		graphics.setColor(Color.BLACK);
+		graphics.drawString("Car", leftTextX, leftY);
+		leftY += rowHeight;
+
+		// Bike
+		graphics.setColor(vehicleColors.get(2));
+		graphics.fillOval(leftSymbolX, leftY - 9, 10, 10);
+		graphics.setColor(Color.BLACK);
+		graphics.drawString("Bike", leftTextX, leftY);
+		leftY += rowHeight;
+
+		// Bus
+		graphics.setColor(vehicleColors.get(1));
+		graphics.fillOval(leftSymbolX, leftY - 9, 10, 10);
+		graphics.setColor(Color.BLACK);
+		graphics.drawString("Bus", leftTextX, leftY);
+		leftY += rowHeight;
+
+		// Rail vehicle
+		graphics.setColor(vehicleColors.get(3));
+		graphics.fillOval(leftSymbolX - 1, leftY - 10, 12, 12);
+		graphics.setColor(Color.BLACK);
+		graphics.drawString("Rail", leftTextX, leftY);
+		leftY += rowHeight;
+
+		// Work activity
+		graphics.setColor(activityColors.get(0));
+		graphics.fillOval(leftSymbolX - 1, leftY - 10, 12, 12);
+		graphics.setColor(Color.BLACK);
+		graphics.drawString("Work activity", leftTextX, leftY);
+
+		// -------------------------------------------------------------
+		// Right column: network layers
+		// -------------------------------------------------------------
+
+		int rightY = startY;
+
+		// Roads
+		graphics.setColor(linkColors.get(1));
+		graphics.drawLine(rightSymbolX, rightY - 5, rightSymbolX + 20, rightY - 5);
+		graphics.drawLine(rightSymbolX, rightY - 4, rightSymbolX + 20, rightY - 4);
+		graphics.setColor(Color.BLACK);
+		graphics.drawString("Roads", rightTextX, rightY);
+		rightY += rowHeight;
+
+		// Bike paths
+		graphics.setColor(linkColors.get(0));
+		graphics.drawLine(rightSymbolX, rightY - 5, rightSymbolX + 20, rightY - 5);
+		graphics.drawLine(rightSymbolX, rightY - 4, rightSymbolX + 20, rightY - 4);
+		graphics.setColor(Color.BLACK);
+		graphics.drawString("Bike paths", rightTextX, rightY);
+		rightY += rowHeight;
+
+		// Railroads
+		graphics.setColor(linkColors.get(2));
+		graphics.drawLine(rightSymbolX, rightY - 5, rightSymbolX + 20, rightY - 5);
+		graphics.drawLine(rightSymbolX, rightY - 4, rightSymbolX + 20, rightY - 4);
+		graphics.setColor(Color.BLACK);
+		graphics.drawString("Railroads", rightTextX, rightY);
+	}
+
 	public void update(Graphics2D graphics, double time) {
 		if (backgroundImage != null) {
 			graphics.drawImage(backgroundImage, 0, 0, windowWidth, windowHeight, null);
@@ -218,5 +334,8 @@ public class Renderer {
 			graphics.setFont(new Font(graphics.getFont().getName(), Font.BOLD, 20));
 			graphics.drawString(Time.writeTime(time), 40, 40);
 		}
+		
+		drawLegend(graphics);
+		
 	}
 }
