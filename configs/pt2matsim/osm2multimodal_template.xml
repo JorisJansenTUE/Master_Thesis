@@ -6,7 +6,7 @@
         <param name="keepPaths" value="false" />
         <param name="keepTagsAsAttributes" value="true" />
         <param name="keepWaysWithPublicTransit" value="true" />
-        <param name="maxLinkLength" value="500.0" />
+        <param name="maxLinkLength" value="200.0" />
 
         <!-- Input and output files should be overwritten by pipeline automatically -->
         <param name="osmFile" value="../../data/osm/locarno_smallest.osm.gz" />

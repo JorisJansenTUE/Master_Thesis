@@ -1,5 +1,5 @@
 crs: EPSG:2056
-sample_fraction: 0.05
+sample_fraction: 0.1
 random_seed: 1234
 
 input:
@@ -44,7 +44,7 @@ od_filters:
     PERSPECTIVE: "R"
 
 output:
-  directory: data/scenarios/locarno
+  directory: data/scenarios/locarno_617
   population: population.xml.gz
   population_attributes: population_attributes.xml.gz
 

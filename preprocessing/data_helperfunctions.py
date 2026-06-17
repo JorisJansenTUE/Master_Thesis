@@ -372,13 +372,13 @@ if __name__ == "__main__":
     #     output_folder=f"{DATA_DIR}/gtfs/locarno_20260422",
     # )
 
-    # gtfs_rough_routes_to_gpkg(
-    #     gtfs_folder=f"{DATA_DIR}/gtfs/locarno_20260422",
-    #     output_file=f"{DATA_DIR}/osm/shapes/locarno_gtfs_routes.gpkg",
-    # )
+    gtfs_rough_routes_to_gpkg(
+        gtfs_folder=f"{DATA_DIR}/interim/locarno_617/gtfs/locarno_617_clipped_gtfs",
+        output_file=f"{DATA_DIR}/interim/locarno_617/gtfs/locarno_617_clipped_gtfs_routes.gpkg",
+    )
     # gtfs_stops_to_gpkg(
     #     gtfs_folder=f"{DATA_DIR}/gtfs/locarno_20260422",
     #     output_file=f"{DATA_DIR}/osm/shapes/locarno_gtfs_stops.gpkg",
     # )
 
-    unused=find_unused_stops(gtfs_folder=f"{DATA_DIR}/gtfs/locarno_20260422",)
+    # unused=find_unused_stops(gtfs_folder=f"{DATA_DIR}/gtfs/locarno_20260422",)

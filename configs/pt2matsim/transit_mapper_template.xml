@@ -20,7 +20,7 @@
     <param name="nLinkThreshold" value="8" />
     <param name="maxLinkCandidateDistance" value="90.0" />
     <param name="candidateDistanceMultiplier" value="1.6" />
-    <param name="maxTravelCostFactor" value="5.0" />
+    <param name="maxTravelCostFactor" value="10.0" /> 
 
     <parameterset type="transportModeAssignment">
       <param name="scheduleMode" value="bus" />

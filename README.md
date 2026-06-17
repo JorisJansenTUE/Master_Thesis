@@ -46,7 +46,7 @@ The Network is then created using the pipeline as found in `preprocessing/networ
 ```powershell
 python -m preprocessing.network.pipeline `
   --scenario locarno `
-  --osm data/raw/osm/Switzerland-260413 `
+  --osm data/raw/osm/Switzerland-260413.osm.pbf `
   --shape data/raw/shapes/Locarno_QGIS_2056.shp `
   --gtfs data/raw/gtfs/gtfs_swiss_20260422.zip `
   --sample-day 20260422 `
