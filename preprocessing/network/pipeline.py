@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from preprocessing.network.clip_gtfs import clip_gtfs_to_shape, read_gtfs_table
-from preprocessing.network.clip_osm import clip_osm_to_shape
+from preprocessing.network.clip_osm import clip_osm_to_shape, classify_bike_suitable_ways
 from preprocessing.network.common import ensure_clean_dir, setup_logging
 from preprocessing.network.config import PipelineConfig, PipelinePaths, make_paths
 from preprocessing.network.run_pt2matsim import (
@@ -143,6 +143,10 @@ def run_pipeline(config: PipelineConfig) -> PipelinePaths:
     logging.info("Scenario directory: %s", config.scenario_dir)
 
     clip_osm_to_shape(config, paths)
+
+    if config.process_bike_tags:
+        classify_bike_suitable_ways(config,paths)
+
     create_unmapped_multimodal_network(config, paths)
 
     clip_gtfs_to_shape(config, paths)
@@ -192,7 +196,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--additional-line-info", default="schedule")
     parser.add_argument("--shape-buffer-degrees", type=float, default=0.0)
     parser.add_argument("--overwrite", action="store_true")
-
+    parser.add_argument("--process_bike-tags", action="store_true",help="Determine whether to manipulate specific Track and Paths OSM tags for better bike network representation")
     parser.add_argument("--java-runner", default="mvn.cmd")
 
     parser.add_argument(
@@ -232,6 +236,7 @@ def main() -> None:
         sample_day=args.sample_day,
         additional_line_info=args.additional_line_info,
         overwrite=args.overwrite,
+        process_bike_tags=args.process_bike_tags,
         shape_buffer_degrees=args.shape_buffer_degrees,
         java_runner=args.java_runner,
         osm_config_template=args.osm_config_template.resolve(),

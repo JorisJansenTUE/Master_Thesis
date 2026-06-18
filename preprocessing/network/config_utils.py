@@ -48,8 +48,16 @@ def generate_osm_config(config: PipelineConfig, paths: PipelinePaths) -> None:
     The pipeline only changes file paths and output CRS.
     """
     tree = load_xml(config.osm_config_template)
-
-    pipeline_managed_params = {
+    if config.process_bike_tags:
+        pipeline_managed_params = {
+        "osmFile": paths.processed_tags_osm.resolve(),
+        "outputNetworkFile": paths.unmapped_network.resolve(),
+        "outputDetailedLinkGeometryFile": paths.unmapped_detailed_link_geometry.resolve(),
+        "outputCoordinateSystem": config.target_crs,
+        }
+           
+    else:
+        pipeline_managed_params = {
         "osmFile": paths.clipped_osm.resolve(),
         "outputNetworkFile": paths.unmapped_network.resolve(),
         "outputDetailedLinkGeometryFile": paths.unmapped_detailed_link_geometry.resolve(),

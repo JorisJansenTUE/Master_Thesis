@@ -24,6 +24,8 @@ class PipelineConfig:
     sample_day: str = "dayWithMostTrips"
     additional_line_info: Optional[str] = "schedule"
 
+    process_bike_tags: bool = False
+    
     overwrite: bool = False
     shape_buffer_degrees: float = 0.0
 
@@ -56,6 +58,8 @@ class PipelinePaths:
     clipped_gtfs_dir: Path
     clipped_gtfs_zip_copy: Path
 
+    processed_tags_osm : Path
+
     unmapped_network: Path
     unmapped_detailed_link_geometry: Path
     unmapped_schedule: Path
@@ -79,6 +83,8 @@ def make_paths(config: PipelineConfig) -> PipelinePaths:
         clipped_osm=interim / "osm" / f"{config.scenario_name}_clipped.osm.gz",
         clipped_gtfs_dir=interim / "gtfs" / f"{config.scenario_name}_clipped_gtfs",
         clipped_gtfs_zip_copy=interim / "gtfs" / f"{config.scenario_name}_clipped_gtfs_debug.zip",
+
+        processed_tags_osm=interim / "osm" / f"{config.scenario_name}_biketags.osm.gz",
 
         unmapped_network=scenario / "network" / f"{config.scenario_name}_unmapped_multimodal_network.xml.gz",
         unmapped_detailed_link_geometry=scenario / "network" / f"{config.scenario_name}_detailedLinkGeometry.csv.gz",
