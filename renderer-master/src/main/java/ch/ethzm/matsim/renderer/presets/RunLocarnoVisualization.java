@@ -12,14 +12,23 @@ public class RunLocarnoVisualization {
 	static public void main(String[] args) {
 		// START CONFIGURATION
 
+		if (args.length != 1) {
+			throw new IllegalArgumentException(
+					"Expected exactly one argument: the MATSim output run folder name, e.g. run618"
+			);
+		}
+
+		String runName = args[0];
+		String runDirectory = "../MATSim/output/" + runName;
+
 		RenderConfig renderConfig = new RenderConfig();
 
 		renderConfig.width = 1280;
 		renderConfig.height = 720;
 
-		renderConfig.networkPath = "../MATSim/output/run617/output_network.xml.gz";
-		renderConfig.eventsPath = "../MATSim/output/run617/output_events.xml.gz";
-		renderConfig.outputPath = "../MATSim/output/run617/animation.mp4";
+		renderConfig.networkPath = runDirectory + "/output_network.xml.gz";
+		renderConfig.eventsPath = runDirectory + "/output_events.xml.gz";
+		renderConfig.outputPath = runDirectory + "/animation.mp4";
 		renderConfig.backgroundImagePath = "C:/Users/20201733/Downloads/animation_background_1506.png";
         
 		renderConfig.startTime = 8.0 * 3600.0;
