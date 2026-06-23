@@ -14,6 +14,7 @@ from preprocessing.network.run_pt2matsim import (
     create_unmapped_multimodal_network,
     create_unmapped_transit_schedule,
 )
+from preprocessing.network.postprocess_net import apply_bike_speed_heuristic_and_clean
 from preprocessing.utils import PT2MATSIM_DIR
 
 
@@ -149,6 +150,9 @@ def run_pipeline(config: PipelineConfig) -> PipelinePaths:
 
     create_unmapped_multimodal_network(config, paths)
 
+    if config.postprocess_bike_net:
+        apply_bike_speed_heuristic_and_clean(config, paths)
+
     clip_gtfs_to_shape(config, paths)
     sanity_check_gtfs(paths)
 
@@ -196,7 +200,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--additional-line-info", default="schedule")
     parser.add_argument("--shape-buffer-degrees", type=float, default=0.0)
     parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument("--process_bike-tags", action="store_true",help="Determine whether to manipulate specific Track and Paths OSM tags for better bike network representation")
+    parser.add_argument("--process-bike-tags", action="store_true",help="Determine whether to manipulate specific Track and Paths OSM tags for better bike network representation")
+    parser.add_argument("--postprocess-bike-net", action="store_true",help="Postprocess bike network and remove from all roads above a certain speed threshold, useful when high-class roads are sometimes used by bicycles")
     parser.add_argument("--java-runner", default="mvn.cmd")
 
     parser.add_argument(
@@ -237,6 +242,7 @@ def main() -> None:
         additional_line_info=args.additional_line_info,
         overwrite=args.overwrite,
         process_bike_tags=args.process_bike_tags,
+        postprocess_bike_net=args.postprocess_bike_net,
         shape_buffer_degrees=args.shape_buffer_degrees,
         java_runner=args.java_runner,
         osm_config_template=args.osm_config_template.resolve(),

@@ -81,7 +81,7 @@
 
         
         <parameterset type="wayDefaultParams">
-            <param name="allowedTransportModes" value="car" />
+            <param name="allowedTransportModes" value="car,bike" />
             <param name="freespeed" value="22.22222222222222" />
             <param name="freespeedFactor" value="1.0" />
             <param name="laneCapacity" value="1500.0" />
@@ -92,7 +92,7 @@
         </parameterset>
 
         <parameterset type="wayDefaultParams">
-            <param name="allowedTransportModes" value="car" />
+            <param name="allowedTransportModes" value="car,bike" />
             <param name="freespeed" value="16.666666666666668" />
             <param name="freespeedFactor" value="1.0" />
             <param name="laneCapacity" value="1500.0" />

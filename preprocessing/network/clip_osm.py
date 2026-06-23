@@ -146,7 +146,6 @@ def classify_bike_suitable_ways(
     Output:
         paths.classified_osm
     """
-    del config  # Reserved for future classification settings.
 
     input_path = Path(paths.clipped_osm)
     output_path = Path(paths.processed_tags_osm)

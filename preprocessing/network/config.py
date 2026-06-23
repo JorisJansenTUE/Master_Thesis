@@ -25,7 +25,8 @@ class PipelineConfig:
     additional_line_info: Optional[str] = "schedule"
 
     process_bike_tags: bool = False
-    
+    postprocess_bike_net: bool = False
+
     overwrite: bool = False
     shape_buffer_degrees: float = 0.0
 
@@ -61,6 +62,7 @@ class PipelinePaths:
     processed_tags_osm : Path
 
     unmapped_network: Path
+    
     unmapped_detailed_link_geometry: Path
     unmapped_schedule: Path
     unmapped_vehicles: Path
@@ -87,6 +89,7 @@ def make_paths(config: PipelineConfig) -> PipelinePaths:
         processed_tags_osm=interim / "osm" / f"{config.scenario_name}_biketags.osm.gz",
 
         unmapped_network=scenario / "network" / f"{config.scenario_name}_unmapped_multimodal_network.xml.gz",
+
         unmapped_detailed_link_geometry=scenario / "network" / f"{config.scenario_name}_detailedLinkGeometry.csv.gz",
         unmapped_schedule=scenario / "schedule" / f"{config.scenario_name}_unmapped_transit_schedule.xml.gz",
         unmapped_vehicles=scenario / "vehicles" / f"{config.scenario_name}_unmapped_vehicles.xml.gz",
