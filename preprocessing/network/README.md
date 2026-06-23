@@ -171,6 +171,3 @@ All output files will be written to two folders:
 ## Notes
 Some functions and refinements are still wip:
 - Add compatibility with `preprocessing/assign_road_widths` 
-- Add additional heuristic after network creation that compares generated max speed with max speed in OSM and overwrites with the OSM speed when not equal.
-- Refine which road types to keep and which not (e.g. include service roads or not?)
-- Refine where bicycles should be allowed
