@@ -30,7 +30,7 @@ class PipelineConfig:
     overwrite: bool = False
     shape_buffer_degrees: float = 0.0
 
-    matsim_project_dir: Path = MATSIM_PROJECT_DIR
+    matsim_project_dir: Path = MATSIM_PROJECT_DIR / "network"
     java_runner: str = "mvn.cmd"
 
     osm_config_template: Path = PT2MATSIM_DIR / "osm2multimodal_template.xml"
