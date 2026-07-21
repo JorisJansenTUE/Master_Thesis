@@ -19,7 +19,7 @@ public class RunLocarnoVisualization {
 		}
 
 		String runName = args[0];
-		String runDirectory = "../MATSim/output/" + runName;
+		String runDirectory = "data/scenarios/" + runName + "/output";
 
 		RenderConfig renderConfig = new RenderConfig();
 
