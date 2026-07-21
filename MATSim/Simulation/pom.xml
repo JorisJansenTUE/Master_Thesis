@@ -102,9 +102,6 @@
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.5.0</version>
-                <configuration>
-                    <mainClass>${main.class}</mainClass>
-                </configuration>
             </plugin>
 
             <!-- Optional, but useful if you want a standalone simulation jar for the cluster -->
