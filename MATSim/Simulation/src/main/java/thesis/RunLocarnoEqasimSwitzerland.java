@@ -19,6 +19,7 @@ import ch.sbb.matsim.config.SwissRailRaptorConfigGroup;
 import org.eqasim.core.components.config.EqasimConfigGroup;
 import org.eqasim.core.components.raptor.EqasimRaptorConfigGroup;
 import org.matsim.contribs.discrete_mode_choice.modules.config.DiscreteModeChoiceConfigGroup;
+import org.matsim.contrib.bicycle.BicycleConfigGroup;
 
 
 public class RunLocarnoEqasimSwitzerland {
@@ -45,7 +46,8 @@ public class RunLocarnoEqasimSwitzerland {
                 new EqasimConfigGroup(),
                 new DiscreteModeChoiceConfigGroup(),
                 new SwissRailRaptorConfigGroup(),
-                new EqasimRaptorConfigGroup()
+                new EqasimRaptorConfigGroup(),
+                new BicycleConfigGroup()
         );
 
         configurator.updateConfig(config);
@@ -69,6 +71,8 @@ public class RunLocarnoEqasimSwitzerland {
 
         Controler controller = new Controler(scenario);
         configurator.configureController(controller);
+        
+        controller.addOverridingModule(new LocarnoBicycleRoutingModule());
 
         controller.run();
     }
