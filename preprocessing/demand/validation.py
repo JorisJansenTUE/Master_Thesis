@@ -65,7 +65,7 @@ def plot_population_summary(
     distances: list[float],
     output_folder: str | Path = "population_validation",
 ) -> None:
-    output_folder = Path(output_folder)
+    output_folder = Path(output_folder / "output")
     output_folder.mkdir(parents=True, exist_ok=True)
 
     # --------------------------------------------------------------
