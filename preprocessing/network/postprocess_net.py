@@ -261,4 +261,4 @@ def apply_bike_speed_heuristic_and_clean(
 
         shutil.move(cleaned_network, input_network)
 
-    logging.info("Updated mapped network with bike-speed-cleaned network: %s", input_network)
+    logging.info("Updated unmapped network with bike-speed-cleaned network: %s", input_network)
