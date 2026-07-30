@@ -15,12 +15,13 @@ from shapely.geometry.base import BaseGeometry
 
 from preprocessing.assign_road_widths.width_config import WidthEstimationConfig
 
+from preprocessing.assign_road_widths.helpers.clipping import TARGET_CRS, read_project_boundary, write_osmium_boundary_geojson, clip_osm_to_boundary, clip_cadastral_layers
 from preprocessing.assign_road_widths.helpers.load import CadastralSurfaceLoader, OsmXmlReader, OsmGeometryBuilder
 from preprocessing.assign_road_widths.helpers.sanity_checks import SanityChecker
 from preprocessing.assign_road_widths.helpers.write import OsmXmlWriter
 from preprocessing.assign_road_widths.helpers.width_estimation import WidthStats, WayWidthResult, WidthEstimator
 
-from preprocessing.utils import PROJECT_ROOT,DATA_DIR, OSM_DIR
+from preprocessing.utils import PROJECT_ROOT,DATA_DIR, OSM_DIR, RAW_DIR
 
 
 # =============================================================================
@@ -167,24 +168,76 @@ class OsmWidthTaggingWorkflow:
         return expected_way_ids, width_results
 
 
+def main(clip=True) -> None:
+    # -----------------------------------------------------------------
+    # Inputs
+    # -----------------------------------------------------------------
 
-def main() -> None:
+    project_shape = Path(
+        f"{RAW_DIR}/shapes/Locarno_project_boundary.shp"
+    )
+
+    input_osm = Path(
+        f"{OSM_DIR}/Switzerland-260413.osm.pbf"
+    )
+
+    input_cadastral = Path(
+        r"C:\Users\20201733\Documents\Thesis\Data\Cadastral_TI_gpkg_lv95\geopackage\av_TI_2056.gpkg"
+    )
+    # -----------------------------------------------------------------
+    # Intermediates
+    # -----------------------------------------------------------------
+    boundary_geojson = Path(f"{RAW_DIR}/shapes/Locarno_project_boundary.geojson")
+    clipped_osm = Path(f"{OSM_DIR}/locarno_proj_clipped.osm.gz")
+    clipped_cadastral = Path(f"{RAW_DIR}/cadastral/locarno_cadastral_clipped.gpkg")
+    output_osm = Path(f"{OSM_DIR}/width_tagged_v2/Locarno_with_widths.osm.gz")
+
+    # -----------------------------------------------------------------
+    # Clipping
+    # -----------------------------------------------------------------
+    if clip is True: 
+        boundary = read_project_boundary(
+            shape_path=project_shape,
+            target_crs=TARGET_CRS,
+
+            # Prevent edge effects during cadastral width estimation.
+            buffer_m=25.0,
+        )
+
+        write_osmium_boundary_geojson(
+            boundary=boundary,
+            output_geojson=boundary_geojson,
+        )
+
+        clip_osm_to_boundary(
+            input_osm=input_osm,
+            boundary_geojson=boundary_geojson,
+            output_osm=clipped_osm,
+        )
+
+        clip_cadastral_layers(
+            input_gpkg=input_cadastral,
+            boundary=boundary,
+            output_gpkg=clipped_cadastral,
+            layers=[
+                "lcsf",
+                "soli",
+            ],
+            target_crs=TARGET_CRS,
+        )
+
+
+
     config = WidthEstimationConfig(
-        input_osm_gz=Path(
-            f"{OSM_DIR}/locarno_smallest.osm.gz"
-        ),
-        cadastral_gpkg=Path(
-            r"C:\Users\20201733\Documents\Thesis\Data\locarno_cadastral_clipped.gpkg"
-        ),
-        output_osm_gz=Path(
-            f"{OSM_DIR}/w_v2/locarno_smallest_with_widths_v2.osm.gz"
-        ),
+        input_osm_gz=clipped_osm,
+        cadastral_gpkg=clipped_cadastral,
+        output_osm_gz=output_osm,
 
 
         cadastral_class_field="Art",
 
         # Optional tuning.
-        sample_spacing_m=15.0,
+        sample_spacing_m=10.0,
         transect_length_m=25.0,
         min_width_m=1.0,
         max_width_m=22.0,
@@ -195,4 +248,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(clip=False)  # Set to True to clip OSM and cadastral data to project boundary

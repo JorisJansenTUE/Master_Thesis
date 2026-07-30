@@ -191,7 +191,7 @@ class SanityChecker:
             )
 
     def _save_outputs(self, summary: pd.DataFrame) -> None:
-        self.config.plot_dir.mkdir(exist_ok=True)
+        self.config.plot_dir.mkdir(parents=True, exist_ok=True)
 
         summary_csv = self.config.plot_dir / "width_summary_by_way.csv"
         summary.to_csv(summary_csv, index=False)

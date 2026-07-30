@@ -61,22 +61,28 @@ class WidthEstimator:
         if line is None or line.is_empty or line.length < 2.0:
             return None
 
-        distances = np.arange(
-            self.config.sample_spacing_m / 2.0,
-            line.length,
-            self.config.sample_spacing_m,
-        )
+        distances = self._get_sample_distances(line.length)
 
         widths = []
 
         for distance in distances:
-            transect = self._make_transect(line, distance)
+            # This is the point where the transect crosses the OSM way.
+            center_point = line.interpolate(distance)
+
+            transect = self._make_transect(
+                line,
+                distance,
+            )
 
             if transect is None:
                 continue
 
             intersection = transect.intersection(surface)
-            width = self._intersection_length(intersection)
+
+            width = self._closest_intersection_length(
+                intersection,
+                center_point,
+            )
 
             if self.config.min_width_m <= width <= self.config.max_width_m:
                 widths.append(width)
@@ -108,12 +114,13 @@ class WidthEstimator:
             self.carriageway_surface,
         )
 
-        street_space_stats = self.estimate_for_line(
-            line,
-            self.street_space_surface,
-        )
+        # we don't currently use street-space widths, but the code is left here for future use.
+        # street_space_stats = self.estimate_for_line(
+        #     line,
+        #     self.street_space_surface,
+        # )
 
-        if carriageway_stats is None and street_space_stats is None:
+        if carriageway_stats is None: #and street_space_stats is None:
             return None
 
         return WayWidthResult(
@@ -121,7 +128,7 @@ class WidthEstimator:
             highway=tags.get("highway"),
             name=tags.get("name"),
             carriageway=carriageway_stats,
-            street_space=street_space_stats,
+            #street_space=street_space_stats,
         )
 
     def _make_transect(
@@ -167,20 +174,102 @@ class WidthEstimator:
         )
 
         return LineString([start, end])
+    
+    def _get_sample_distances(self, line_length: float) -> np.ndarray:
+        """
+        Generate transect locations along an OSM way.
 
-    @staticmethod
-    def _intersection_length(geom: BaseGeometry) -> float:
-        if geom.is_empty:
+        Longer ways use approximately the configured sampling spacing.
+        Short ways receive at least a minimum number of samples.
+        Samples are kept away from the way endpoints, where junction
+        measurements are more likely.
+        """
+        spacing = self.config.sample_spacing_m
+        min_samples = self.config.min_samples_per_way
+        max_samples = self.config.max_samples_per_way
+
+        if line_length < 2.0:
+            return np.array([])
+
+        # Normal fixed-spacing samples.
+        distances = np.arange(
+            spacing / 2.0,
+            line_length,
+            spacing,
+        )
+
+        # Long ways already have enough samples.
+        if len(distances) >= min_samples:
+            if len(distances) > max_samples:
+                indices = np.linspace(
+                    0,
+                    len(distances) - 1,
+                    max_samples,
+                    dtype=int,
+                )
+                distances = distances[indices]
+
+            return distances
+
+        # Short ways: distribute a minimum number of samples over the
+        # interior of the line rather than sampling near the endpoints.
+        return np.linspace(
+            line_length / (min_samples + 1),
+            line_length * min_samples / (min_samples + 1),
+            min_samples,
+        )
+
+    @classmethod
+    def _closest_intersection_length(
+        cls,
+        geom: BaseGeometry,
+        center_point: BaseGeometry,
+        max_offset_m: float = 2.0,
+    ) -> float:
+
+        line_parts = cls._extract_line_parts(geom)
+
+        if not line_parts:
             return 0.0
 
-        if geom.geom_type in {"LineString", "MultiLineString"}:
-            return geom.length
+        closest_part = min(
+            line_parts,
+            key=lambda part: part.distance(center_point),
+        )
 
-        if geom.geom_type == "GeometryCollection":
-            return sum(
-                part.length
-                for part in geom.geoms
-                if part.geom_type in {"LineString", "MultiLineString"}
-            )
+        offset = closest_part.distance(center_point)
 
-        return 0.0
+        if offset > max_offset_m:
+            return 0.0
+
+        return float(closest_part.length)
+    
+    @classmethod
+    def _extract_line_parts(
+        cls,
+        geom: BaseGeometry,
+    ) -> List[LineString]:
+        """
+        Recursively extract individual LineStrings from an intersection
+        geometry.
+        """
+        if geom is None or geom.is_empty:
+            return []
+
+        if geom.geom_type == "LineString":
+            return [geom]
+
+        if geom.geom_type in {
+            "MultiLineString",
+            "GeometryCollection",
+        }:
+            line_parts: List[LineString] = []
+
+            for part in geom.geoms:
+                line_parts.extend(
+                    cls._extract_line_parts(part)
+                )
+
+            return line_parts
+
+        return []

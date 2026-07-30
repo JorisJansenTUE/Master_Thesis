@@ -30,6 +30,8 @@ class WidthEstimationConfig:
     source_crs: str = "EPSG:4326"   # OSM lon/lat
     target_crs: str = "EPSG:2056"   # Swiss LV95, metres
 
+    min_samples_per_way: int = 2
+    max_samples_per_way: int = 20
     sample_spacing_m: float = 10.0
     transect_length_m: float = 25.0
 
@@ -54,7 +56,6 @@ class WidthEstimationConfig:
     service_values: frozenset = frozenset({
         "bus",
         "busway",
-        "alley",
     })
 
     carriageway_classes: frozenset = frozenset({
