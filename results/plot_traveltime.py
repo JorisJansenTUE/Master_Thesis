@@ -9,7 +9,7 @@ from preprocessing.utils import PROJECT_ROOT, DATA_DIR
 # ------------------------------------------------------------------
 # Settings
 # ------------------------------------------------------------------
-SCENARIO= Path(DATA_DIR / "scenarios" / "locarno_720" / "output")
+SCENARIO= Path(DATA_DIR / "NDA_Eth_Model" / "Locarno" / "simulation_output")
 TRIPS_FILE = Path(
      SCENARIO / "output_trips.csv.gz"
 )
@@ -20,6 +20,28 @@ MODES_TO_PLOT = {
     "car": "Car",
     "bike": "Bicycle",
     "pt": "Public transport",
+    "walk": "Walk",
+}
+
+MODE_MAPPING = {
+    # Car
+    "car": "car",
+    "car_loop": "car",
+    "car_passenger": "car",
+    "car_passenger_loop": "car",
+    "truck": "car",
+
+    # Bicycle
+    "bike": "bike",
+    "bike_loop": "bike",
+
+    # Public transport
+    "pt": "pt",
+
+    # Walk
+    "walk": "walk",
+    "walk_loop": "walk",
+    "remote_walk": "walk",
 }
 
 BIN_WIDTH_MINUTES = 1
@@ -30,6 +52,7 @@ X_LIMITS = {
     "car": (0, 20),
     "bike": (0, 20),
     "pt": (0, 45),
+    "walk": (0, 45),
 }
 
 
@@ -173,12 +196,39 @@ def main() -> None:
             f"Available columns: {list(trips.columns)}"
         )
 
-    trips["main_mode"] = (
+    trips["main_mode_raw"] = (
         trips["main_mode"]
         .astype(str)
         .str.strip()
         .str.lower()
     )
+
+    print("Original MATSim modes:")
+    print(trips["main_mode_raw"].value_counts())
+    print()
+
+    # Aggregate detailed MATSim modes into four main modes
+    trips["main_mode"] = trips["main_mode_raw"].map(MODE_MAPPING)
+
+    # Show modes which are not used in the analysis
+    unmapped_modes = trips.loc[
+        trips["main_mode"].isna(),
+        "main_mode_raw",
+    ].value_counts()
+
+    if not unmapped_modes.empty:
+        print("Excluded/unmapped modes:")
+        print(unmapped_modes)
+        print()
+
+    # Keep only Car / Bike / PT / Walk
+    trips = trips.loc[
+        trips["main_mode"].notna()
+    ].copy()
+
+    print("Aggregated modes:")
+    print(trips["main_mode"].value_counts())
+    print()
 
     trips["travel_time_seconds"] = matsim_time_to_seconds(
         trips["trav_time"]
@@ -193,10 +243,6 @@ def main() -> None:
         np.isfinite(trips["travel_time_minutes"])
         & (trips["travel_time_minutes"] > 0)
     ].copy()
-
-    print("Modes found in the MATSim output:")
-    print(trips["main_mode"].value_counts())
-    print()
 
     plot_travel_time_histograms(trips)
 
