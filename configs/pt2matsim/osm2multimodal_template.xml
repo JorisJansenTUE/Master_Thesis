@@ -16,7 +16,7 @@
         <!-- General parameters -->
         <param name="parseTurnRestrictions" value="true" />
         <param name="scaleMaxSpeed" value="false" />
-        <param name="writeCRS" value="true" />
+        <param name="writeCRS" value="false" />
 
         <!-- Routable subnetworks -->
         <parameterset type="routableSubnetwork">

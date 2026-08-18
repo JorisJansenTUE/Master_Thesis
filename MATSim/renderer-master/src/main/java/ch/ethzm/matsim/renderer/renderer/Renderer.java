@@ -293,9 +293,13 @@ public class Renderer {
 
 					double s = (time - t.startTime) / (t.endTime - t.startTime);
 
-					Coord coord = CoordUtils.plus(link.getFromNode().getCoord(), CoordUtils.scalarMult(s,
-							CoordUtils.minus(link.getToNode().getCoord(), link.getFromNode().getCoord())));
+					Coord from = link.getFromNode().getCoord();
+					Coord to = link.getToNode().getCoord();
 
+					double x = from.getX() + s * (to.getX() - from.getX());
+					double y = from.getY() + s * (to.getY() - from.getY());
+
+					Coord coord = new Coord(x, y);
 					coord = transform.scenarioToWindow(coord);
 
 					int size = vehicleSizes.get(t.vehicleType);

@@ -19,7 +19,7 @@ public class RunLocarnoVisualization {
 		}
 
 		String runName = args[0];
-		String runDirectory = "data/scenarios/" + runName + "/output";
+		String runDirectory = "data/" + runName + "/simulation_output";
 
 		RenderConfig renderConfig = new RenderConfig();
 
