@@ -27,6 +27,7 @@ class WidthStats:
     mean: float
     p10: float
     p90: float
+    spread: float
     minimum: float
     maximum: float
     n: int
@@ -38,7 +39,10 @@ class WayWidthResult:
     highway: Optional[str]
     name: Optional[str]
     carriageway: Optional[WidthStats]
-    street_space: Optional[WidthStats]
+    final_width_m: Optional[float]
+    method: str = "cadastral_estimate"
+    optimizable: bool = True
+    lanes_used: Optional[int] = None
 
 
 class WidthEstimator:
@@ -51,11 +55,9 @@ class WidthEstimator:
         self,
         config: WidthEstimationConfig,
         carriageway_surface: BaseGeometry,
-        street_space_surface: BaseGeometry,
     ):
         self.config = config
         self.carriageway_surface = carriageway_surface
-        self.street_space_surface = street_space_surface
 
     def estimate_for_line(self, line: LineString, surface: BaseGeometry) -> Optional[WidthStats]:
         if line is None or line.is_empty or line.length < 2.0:
@@ -97,6 +99,7 @@ class WidthEstimator:
             mean=float(np.mean(widths_array)),
             p10=float(np.percentile(widths_array, 10)),
             p90=float(np.percentile(widths_array, 90)),
+            spread=float(np.percentile(widths_array, 90) - np.percentile(widths_array, 10)),
             minimum=float(np.min(widths_array)),
             maximum=float(np.max(widths_array)),
             n=int(len(widths_array)),
@@ -114,21 +117,15 @@ class WidthEstimator:
             self.carriageway_surface,
         )
 
-        # we don't currently use street-space widths, but the code is left here for future use.
-        # street_space_stats = self.estimate_for_line(
-        #     line,
-        #     self.street_space_surface,
-        # )
-
-        if carriageway_stats is None: #and street_space_stats is None:
-            return None
+        raw_width = (carriageway_stats.median if carriageway_stats is not None else None)
 
         return WayWidthResult(
             way_id=way_id,
             highway=tags.get("highway"),
             name=tags.get("name"),
             carriageway=carriageway_stats,
-            #street_space=street_space_stats,
+            final_width_m=raw_width,
+            method="cadastral_estimate",
         )
 
     def _make_transect(

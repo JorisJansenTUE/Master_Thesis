@@ -69,6 +69,14 @@ class WidthEstimationConfig:
         "uebrige_befestigte",
     })
 
+    # Unreliability parameters
+    default_lanes=2
+    normal_lane_width_m=3.0
+    wide_lane_width_m=4.5 #used in trunk roads and motorways
+
+    max_unreliable_samples=5
+    min_unreliable_spread_m=2
+
     @property
     def plot_dir(self) -> Path:
         return self.output_osm_gz.parent / "width_sanity_plots"

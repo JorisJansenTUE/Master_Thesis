@@ -20,6 +20,7 @@ from preprocessing.assign_road_widths.helpers.load import CadastralSurfaceLoader
 from preprocessing.assign_road_widths.helpers.sanity_checks import SanityChecker
 from preprocessing.assign_road_widths.helpers.write import OsmXmlWriter
 from preprocessing.assign_road_widths.helpers.width_estimation import WidthStats, WayWidthResult, WidthEstimator
+from preprocessing.assign_road_widths.helpers.fix_errors import WidthResultFixer
 
 from preprocessing.utils import PROJECT_ROOT,DATA_DIR, OSM_DIR, RAW_DIR
 
@@ -91,9 +92,10 @@ class OsmWidthTaggingWorkflow:
         self.config = config
         self.road_filter = OsmRoadFilter(config)
         self.osm_reader = OsmXmlReader(config.input_osm_gz)
+        self.width_postprocessor = WidthResultFixer(config)
 
     def run(self) -> None:
-        carriageway_surface, street_space_surface = (
+        carriageway_surface, _ = (              #previously also street_space_surface, but we don't currently use street-space widths
             CadastralSurfaceLoader(self.config).load_surfaces()
         )
 
@@ -108,7 +110,6 @@ class OsmWidthTaggingWorkflow:
         estimator = WidthEstimator(
             config=self.config,
             carriageway_surface=carriageway_surface,
-            street_space_surface=street_space_surface,
         )
 
         expected_way_ids, width_results = self._estimate_widths(
@@ -159,8 +160,14 @@ class OsmWidthTaggingWorkflow:
                 line=line,
             )
 
-            if result is not None:
-                width_results[way_id] = result
+            result = self.width_postprocessor.process(
+                result=result,
+                tags=tags,
+            )
+
+            
+            width_results[way_id] = result
+
 
         print(f"Relevant road ways: {len(expected_way_ids)}")
         print(f"Ways with width estimates: {len(width_results)}")

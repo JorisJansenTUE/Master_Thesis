@@ -45,7 +45,7 @@ class OsmXmlWriter:
             if way_id not in width_results:
                 continue
 
-            result = width_results[way_id]
+            result = width_results.get(way_id)
             self._add_width_tags(way, result)
 
         with gzip.open(self.config.output_osm_gz, "wb") as file:
@@ -63,30 +63,51 @@ class OsmXmlWriter:
         result: WayWidthResult,
     ) -> None:
 
+        if result.final_width_m is not None:
+            self._add_or_replace_tag(
+                way,
+                "width:carriageway:estimated",
+                f"{result.final_width_m:.2f}",
+            )
+
         if result.carriageway is not None:
             self._add_stats_tags(
                 way,
                 prefix="width:carriageway",
                 stats=result.carriageway,
             )
-
-        if result.street_space is not None:
-            self._add_stats_tags(
+        else:
+            self._add_or_replace_tag(
                 way,
-                prefix="width:street_space",
-                stats=result.street_space,
+                "width:carriageway:n_samples",
+                "0",
             )
+
+        # if result.street_space is not None:
+        #     self._add_stats_tags(
+        #         way,
+        #         prefix="width:street_space",
+        #         stats=result.street_space,
+        #     )
 
         self._add_or_replace_tag(
             way,
-            "width:source",
-            "cadastral_lcsfproj",
+            "width:carriageway:method",
+            result.method,
         )
 
         self._add_or_replace_tag(
             way,
-            "width:method",
-            "median_perpendicular_transects",
+            "width:carriageway:lanes_used",
+            result.lanes_used,
+        )
+        
+        
+
+        self._add_or_replace_tag(
+            way,
+            "width:carriageway:optimizable",
+            "yes" if result.optimizable else "no",
         )
 
     def _add_stats_tags(
@@ -98,7 +119,7 @@ class OsmXmlWriter:
 
         self._add_or_replace_tag(
             way,
-            f"{prefix}:estimated",
+            f"{prefix}:raw",
             f"{stats.median:.2f}",
         )
 
@@ -113,6 +134,7 @@ class OsmXmlWriter:
             f"{prefix}:p90",
             f"{stats.p90:.2f}",
         )
+        
 
         self._add_or_replace_tag(
             way,
