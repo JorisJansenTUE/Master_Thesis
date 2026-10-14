@@ -181,7 +181,7 @@ def main(clip=True) -> None:
     # -----------------------------------------------------------------
 
     project_shape = Path(
-        f"{RAW_DIR}/shapes/Locarno_project_boundary.shp"
+        f"{RAW_DIR}/shapes/REV_Cintura_project.shp"
     )
 
     input_osm = Path(
@@ -194,10 +194,10 @@ def main(clip=True) -> None:
     # -----------------------------------------------------------------
     # Intermediates
     # -----------------------------------------------------------------
-    boundary_geojson = Path(f"{RAW_DIR}/shapes/Locarno_project_boundary.geojson")
-    clipped_osm = Path(f"{OSM_DIR}/locarno_proj_clipped.osm.gz")
-    clipped_cadastral = Path(f"{RAW_DIR}/cadastral/locarno_cadastral_clipped.gpkg")
-    output_osm = Path(f"{OSM_DIR}/width_tagged_v2/Locarno_with_widths.osm.gz")
+    boundary_geojson = Path(f"{RAW_DIR}/shapes/REV_boundary_2D.geojson")
+    clipped_osm = Path(f"{OSM_DIR}/REV_network.osm.gz")
+    clipped_cadastral = Path(f"{RAW_DIR}/cadastral/REV_cadastral_clipped.gpkg")
+    output_osm = Path(f"{OSM_DIR}/REV_width_tagged/REV_with_widths.osm.gz")
 
     # -----------------------------------------------------------------
     # Clipping
@@ -210,11 +210,14 @@ def main(clip=True) -> None:
             # Prevent edge effects during cadastral width estimation.
             buffer_m=25.0,
         )
+        if boundary_geojson.exists():
+            print(f"Boundary GeoJSON already exists: {boundary_geojson}")
 
-        write_osmium_boundary_geojson(
-            boundary=boundary,
-            output_geojson=boundary_geojson,
-        )
+        else:
+            write_osmium_boundary_geojson(
+                boundary=boundary,
+                output_geojson=boundary_geojson,
+            )
 
         clip_osm_to_boundary(
             input_osm=input_osm,

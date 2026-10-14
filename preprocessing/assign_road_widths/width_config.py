@@ -18,6 +18,17 @@ from shapely.geometry.base import BaseGeometry
 # CONFIGURATION
 # =============================================================================
 
+FALLBACK_LANE_WIDTHS = {
+    "residential": 2.80,
+    "unclassified": 2.01,
+    "tertiary": 3.50,
+    "secondary": 3.69,
+    "primary": 4.45,
+    "trunk": 4.90,
+    "living_street": 4.75,
+}
+
+
 @dataclass(frozen=True)
 class WidthEstimationConfig:
     input_osm_gz: Path
@@ -71,8 +82,8 @@ class WidthEstimationConfig:
 
     # Unreliability parameters
     default_lanes=2
-    normal_lane_width_m=3.0
-    wide_lane_width_m=4.5 #used in trunk roads and motorways
+    
+    default_lane_width_m: float = 3.0
 
     max_unreliable_samples=5
     min_unreliable_spread_m=2
