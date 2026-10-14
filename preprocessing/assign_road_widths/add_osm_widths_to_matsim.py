@@ -1,6 +1,5 @@
 """Copy final carriageway widths from OSM XML onto MATSim network links.
 
-Requires: pip install lxml
 Example:
   python add_osm_widths_to_matsim.py --osm REV_with_widths.osm.gz \
       --network locarno_network.xml.gz --output locarno_network_with_widths.xml.gz
