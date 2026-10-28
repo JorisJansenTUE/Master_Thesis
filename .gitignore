@@ -19,6 +19,7 @@ matsim/output/
 # Data ( ignore large/raw files) -> might change this later
 
 data/
+*.csv 
 
 # LaTeX
 

@@ -19,7 +19,7 @@ public class RunLocarnoVisualization {
 		}
 
 		String runName = args[0];
-		String runDirectory = "data/" + runName + "/simulation_output";
+		String runDirectory = "data/" + runName + "/simulation_output_v2";
 
 		RenderConfig renderConfig = new RenderConfig();
 
@@ -75,7 +75,7 @@ public class RunLocarnoVisualization {
 
 		VehicleConfig ptVehicle = new VehicleConfig();
 		renderConfig.vehicles.add(ptVehicle);
-		ptVehicle.contains = Arrays.asList("rail");
+		ptVehicle.contains = Arrays.asList("rail","ferry");
 		ptVehicle.color = Arrays.asList(225, 127, 245); // .asList(7, 145, 222);
 		ptVehicle.size = 6;
 
