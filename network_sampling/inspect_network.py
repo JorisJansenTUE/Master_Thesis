@@ -137,6 +137,63 @@ def classify_missing_width_segment(
 
     return "unexplained"
 
+# ---------------------------------------------------------------------
+#Segment Helpers
+# ---------------------------------------------------------------------
+
+def get_segment_modes(
+    segment: StreetSegment,
+    network: MatsimNetwork,
+) -> frozenset[str]:
+    """
+    Return all modes that occur on any MATSim link belonging
+    to the StreetSegment.
+    """
+
+    modes: set[str] = set()
+
+    for link_id in segment.link_ids:
+        modes.update(
+            network.links[link_id].allowed_modes
+        )
+
+    return frozenset(modes)
+
+
+def find_parallel_street_segments(
+    segments: tuple[StreetSegment, ...],
+) -> dict[
+    tuple[str, str],
+    list[StreetSegment],
+]:
+    """
+    Find node pairs containing more than one StreetSegment.
+    """
+
+    by_node_pair: dict[
+        tuple[str, str],
+        list[StreetSegment],
+    ] = {}
+
+    for segment in segments:
+
+        node_pair = (
+            segment.node_a,
+            segment.node_b,
+        )
+
+        by_node_pair.setdefault(
+            node_pair,
+            [],
+        ).append(segment)
+
+    return {
+        node_pair: grouped_segments
+        for node_pair, grouped_segments
+        in by_node_pair.items()
+        if len(grouped_segments) > 1
+    }
+
 
 # ---------------------------------------------------------------------
 # Printing helpers
@@ -663,6 +720,123 @@ def inspect_network(
             )
 
     # -------------------------------------------------------------
+    # Parallel StreetSegments
+    # -------------------------------------------------------------
+
+    parallel_groups = find_parallel_street_segments(
+        segments
+    )
+
+    print_header(
+        "Parallel StreetSegments between identical nodes"
+    )
+
+    print(
+        f"Node pairs with multiple StreetSegments: "
+        f"{len(parallel_groups):,}"
+    )
+
+    overlapping_pairs = 0
+    non_overlapping_pairs = 0
+
+    for node_pair, grouped_segments in parallel_groups.items():
+
+        print()
+        print(
+            f"Nodes: {node_pair[0]} <-> {node_pair[1]}"
+        )
+
+        # Print each parallel StreetSegment first
+        for segment in grouped_segments:
+
+            modes = get_segment_modes(
+                segment,
+                network,
+            )
+
+            print(
+                f"  {segment.id}"
+            )
+
+            print(
+                f"    OSM way: "
+                f"{segment.osm_way_id}"
+            )
+
+            print(
+                f"    Modes:   "
+                f"{','.join(sorted(modes))}"
+            )
+
+            print(
+                f"    Links:   "
+                f"{segment.link_ids}"
+            )
+
+        # Compare every StreetSegment against every other one
+        for i in range(len(grouped_segments)):
+
+            segment_a = grouped_segments[i]
+
+            modes_a = get_segment_modes(
+                segment_a,
+                network,
+            )
+
+            for j in range(
+                i + 1,
+                len(grouped_segments),
+            ):
+
+                segment_b = grouped_segments[j]
+
+                modes_b = get_segment_modes(
+                    segment_b,
+                    network,
+                )
+
+                overlap = (
+                    modes_a
+                    & modes_b
+                )
+
+                print()
+                print(
+                    f"    Compare:"
+                )
+
+                print(
+                    f"      {segment_a.id}"
+                )
+
+                print(
+                    f"      {segment_b.id}"
+                )
+
+                print(
+                    f"      Overlapping modes: "
+                    f"{','.join(sorted(overlap)) if overlap else 'NONE'}"
+                )
+
+                if overlap:
+                    overlapping_pairs += 1
+                else:
+                    non_overlapping_pairs += 1
+
+
+    print()
+    print(
+        f"Parallel segment pairs with overlapping modes: "
+        f"{overlapping_pairs:,}"
+    )
+
+    print(
+        f"Parallel segment pairs without overlapping modes: "
+        f"{non_overlapping_pairs:,}"
+    )
+
+
+    # -------------------------------------------------------------
     # Final summary
     # -------------------------------------------------------------
 
@@ -697,6 +871,18 @@ def inspect_network(
         f"Problematic missing widths:   "
         f"{problematic_missing:,}"
     )
+
+    print(
+        f"Parallel overlapping modes: "
+        f"{overlapping_pairs:,}"
+        )
+    
+    print(
+        f"Parallel without overlapping modes: "
+        f"{non_overlapping_pairs:,}"
+        )
+    
+    
 
 
 # ---------------------------------------------------------------------
