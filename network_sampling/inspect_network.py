@@ -4,16 +4,18 @@ import argparse
 from collections import Counter
 from pathlib import Path
 
-from network_sampling.matsim_network import (
+from network_sampling.network.matsim_network import (
     MatsimLink,
     MatsimNetwork,
     load_matsim_network,
 )
-from network_sampling.street_segments import (
+from network_sampling.network.street_segments import (
     StreetSegment,
     StreetSegmentIndex,
 )
 
+
+# Executable script for inspecting a MATSim network and its derived physical street segments.
 
 # ---------------------------------------------------------------------
 # Configuration

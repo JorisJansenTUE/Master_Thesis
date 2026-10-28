@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import networkx as nx
 
-from network_sampling.matsim_network import MatsimNetwork
-from network_sampling.street_segments import StreetSegmentIndex
+from network_sampling.network.matsim_network import MatsimNetwork
+from network_sampling.network.street_segments import StreetSegmentIndex
 
 
 def build_street_graph(

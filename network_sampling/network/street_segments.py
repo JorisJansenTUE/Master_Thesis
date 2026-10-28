@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from statistics import median
 
-from network_sampling.matsim_network import MatsimLink, MatsimNetwork
+from network_sampling.network.matsim_network import MatsimLink, MatsimNetwork
 
 
 DEFAULT_OSM_ID_ATTRIBUTES = (
