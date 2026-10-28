@@ -194,10 +194,10 @@ def main(clip=True) -> None:
     # -----------------------------------------------------------------
     # Intermediates
     # -----------------------------------------------------------------
-    boundary_geojson = Path(f"{RAW_DIR}/shapes/REV_boundary_2D.geojson")
-    clipped_osm = Path(f"{OSM_DIR}/REV_network.osm.gz")
-    clipped_cadastral = Path(f"{RAW_DIR}/cadastral/REV_cadastral_clipped.gpkg")
-    output_osm = Path(f"{OSM_DIR}/REV_width_tagged/REV_with_widths.osm.gz")
+    boundary_geojson = Path(f"{RAW_DIR}/shapes/REV_boundary_buffered_2D.geojson")
+    clipped_osm = Path(f"{OSM_DIR}/REV_network_buffered.osm.gz")
+    clipped_cadastral = Path(f"{RAW_DIR}/cadastral/REV_cadastral_buffered.gpkg")
+    output_osm = Path(f"{OSM_DIR}/REV_width_tagged_buffered/REV_with_widths_buffered.osm.gz")
 
     # -----------------------------------------------------------------
     # Clipping
@@ -208,7 +208,7 @@ def main(clip=True) -> None:
             target_crs=TARGET_CRS,
 
             # Prevent edge effects during cadastral width estimation.
-            buffer_m=25.0,
+            buffer_m=8000,
         )
         if boundary_geojson.exists():
             print(f"Boundary GeoJSON already exists: {boundary_geojson}")

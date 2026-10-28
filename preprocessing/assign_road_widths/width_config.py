@@ -18,13 +18,18 @@ from shapely.geometry.base import BaseGeometry
 # CONFIGURATION
 # =============================================================================
 
-FALLBACK_LANE_WIDTHS = {
+FALLBACK_LANE_WIDTHS = { #These were measured using analyze_width_per_lane.py, the link roads were given identical values to the main, motorways were not measured)
     "residential": 2.80,
     "unclassified": 2.01,
     "tertiary": 3.50,
     "secondary": 3.69,
+    "secondary_link": 3.69,
     "primary": 4.45,
+    "primary_link": 4.45,
     "trunk": 4.90,
+    "trunk_link": 4.90,
+    "motorway": 4.90,
+    "motorway_link":4.90,
     "living_street": 4.75,
 }
 
@@ -54,14 +59,19 @@ class WidthEstimationConfig:
 
     main_road_classes: frozenset = frozenset({
         "motorway",
+        "motorway_link",
         "trunk",
+        "trunk_link",
         "primary",
+        "primary_link",
         "secondary",
+        "secondary_link",
         "tertiary",
         "unclassified",
         "residential",
         "living_street",
         "road",
+
     })
 
     service_values: frozenset = frozenset({
