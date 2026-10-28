@@ -11,7 +11,7 @@ from preprocessing.utils import DATA_DIR
 # ------------------------------------------------------------------
 
 SCENARIO = Path(
-    DATA_DIR / "NDA_Eth_Model" / "Locarno" / "simulation_output"
+    DATA_DIR / "NDA_Eth_Model" / "Locarno" / "simulation_output_v2"
 )
 
 TRIPS_FILE = SCENARIO / "output_trips.csv.gz"
