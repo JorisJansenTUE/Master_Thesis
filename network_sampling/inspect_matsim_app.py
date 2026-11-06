@@ -7,6 +7,9 @@ from pathlib import Path
 
 from lxml import etree
 
+from itertools import combinations
+
+from network_sampling.interventions.compatibility import interventions_compatible
 from network_sampling.interventions.eligibility import get_eligible_interventions
 from network_sampling.interventions.intervention_types import (
     Intervention,
@@ -153,6 +156,72 @@ def check_application(
 
         print(f"PASS: {intervention.intervention_type.value} on {segment.id}")
 
+def check_compatibility(
+    interventions: list[Intervention],
+    network: MatsimNetwork,
+) -> None:
+    """Check the intervention compatibility rules."""
+
+    # Different segments must always be compatible.
+    different_segments = next(
+        (a, b)
+        for a, b in combinations(interventions, 2)
+        if a.segment_id != b.segment_id
+    )
+    assert interventions_compatible(*different_segments, network)
+
+    # An intervention cannot be combined with itself.
+    intervention = interventions[0]
+    assert not interventions_compatible(intervention, intervention, network)
+
+    # Find two bus lanes in opposite directions on the same segment.
+    bus_lanes = [
+        intervention
+        for intervention in interventions
+        if intervention.intervention_type == InterventionType.DEDICATED_BUS_LANE
+    ]
+
+    opposite_bus_lanes = None
+
+    for a, b in combinations(bus_lanes, 2):
+        if a.segment_id != b.segment_id:
+            continue
+
+        link_a = network.links[a.target_link_ids[0]]
+        link_b = network.links[b.target_link_ids[0]]
+
+        if (
+            link_a.from_node == link_b.to_node
+            and link_a.to_node == link_b.from_node
+        ):
+            opposite_bus_lanes = (a, b)
+            break
+
+    if opposite_bus_lanes is None:
+        raise ValueError("No opposite-direction bus-lane pair found for compatibility test.")
+
+    a, b = opposite_bus_lanes
+    assert interventions_compatible(a, b, network)
+
+    # A bus lane cannot coexist with another intervention on the same segment.
+    incompatible_pair = next(
+        (bus_lane, other)
+        for bus_lane in bus_lanes
+        for other in interventions
+        if bus_lane.segment_id == other.segment_id
+        and other.intervention_type != InterventionType.DEDICATED_BUS_LANE
+    )
+
+    assert not interventions_compatible(*incompatible_pair, network)
+
+    print("PASS: different segments are compatible")
+    print("PASS: same intervention is incompatible")
+    print(
+        f"PASS: opposite bus lanes compatible on "
+        f"{a.segment_id} ({a.target_link_ids[0]}, {b.target_link_ids[0]})"
+    )
+    print("PASS: bus lane + other intervention on same segment is incompatible")
+
 
 def _check_pbl(
     baseline: MatsimNetwork,
@@ -283,6 +352,14 @@ def main() -> None:
         baseline,
         segment_index,
         transit_usage,
+    )
+
+    print("\nCompatibility checks")
+    print("--------------------")
+
+    check_compatibility(
+        candidates,
+        baseline,
     )
 
     interventions = select_test_interventions(candidates)
