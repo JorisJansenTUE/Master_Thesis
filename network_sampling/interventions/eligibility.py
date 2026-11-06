@@ -63,7 +63,7 @@ def get_eligible_interventions(
 
     interventions.extend(_bicycle_street(segment))
     interventions.extend(_pt_bike_street(segment, transit_usage))
-    interventions.extend(_bus_lanes(segment, car_links, transit_usage))
+    interventions.extend(_bus_lanes(segment, car_links, network, transit_usage))
     interventions.extend(_protected_bike_lanes(segment, car_links, transit_usage))
 
     return interventions
@@ -112,14 +112,14 @@ def _pt_bike_street(
 def _bus_lanes(
     segment: StreetSegment,
     car_links: list[MatsimLink],
+    network: MatsimNetwork,
     transit_usage: TransitUsageIndex,
 ) -> list[Intervention]:
     """
     Return eligible dedicated bus-lane interventions.
 
-    A bus lane can only be created on a car link already used by a scheduled
-    bus. If sufficient extra width exists, all car lanes are retained.
-    Otherwise, one car lane on the target link is converted to a bus lane.
+    A bus lane can only be created on a car link used by a scheduled bus
+    and when no dedicated _spec lane already exists in that direction.
     """
 
     if segment.total_width_m is None:
@@ -132,6 +132,9 @@ def _bus_lanes(
 
     for link in car_links:
         if not transit_usage.uses_link(link.id):
+            continue
+
+        if _has_spec_lane(segment, network, link):
             continue
 
         if segment.total_width_m >= required_width_keep_car:
@@ -152,6 +155,21 @@ def _bus_lanes(
 
     return interventions
 
+
+def _has_spec_lane(
+    segment: StreetSegment,
+    network: MatsimNetwork,
+    target_link: MatsimLink,
+) -> bool:
+    """Return whether a _spec link already exists in the target direction."""
+
+    return any(
+        link.id.endswith("_spec")
+        and link.from_node == target_link.from_node
+        and link.to_node == target_link.to_node
+        for link_id in segment.link_ids
+        if (link := network.links[link_id]).id != target_link.id
+    )
 
 def _protected_bike_lanes(
     segment: StreetSegment,

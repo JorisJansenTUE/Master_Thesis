@@ -55,7 +55,7 @@ class MatsimNetwork:
 
 
 # ---------------------------------------------------------------------
-# MATSim XML loading
+# MATSim XML loading and Writing
 # ---------------------------------------------------------------------
 
 def load_matsim_network(path: str | Path) -> MatsimNetwork:
@@ -119,6 +119,82 @@ def load_matsim_network(path: str | Path) -> MatsimNetwork:
         links_xml_attributes=dict(links_element.attrib),
         attributes=network_attributes,
     )
+
+def write_matsim_network(network: MatsimNetwork, path: str | Path) -> None:
+    """
+    Write a MATSim network to XML or XML.GZ.
+
+    Parameters
+    ----------
+    network
+        MATSim network to write.
+
+    path
+        Output .xml or .xml.gz file.
+    """
+    path = Path(path)
+
+    root = etree.Element("network")
+    _write_attributes(root, network.attributes)
+
+    nodes_element = etree.SubElement(root, "nodes")
+
+    for node in network.nodes.values():
+        xml_attributes = dict(node.xml_attributes)
+        xml_attributes.update({
+            "id": node.id,
+            "x": _format_number(node.x),
+            "y": _format_number(node.y),
+        })
+
+        node_element = etree.SubElement(nodes_element, "node", **xml_attributes)
+        _write_attributes(node_element, node.attributes)
+
+    links_element = etree.SubElement(
+        root,
+        "links",
+        **{key: str(value) for key, value in network.links_xml_attributes.items()},
+    )
+
+    for link in network.links.values():
+        xml_attributes = dict(link.xml_attributes)
+
+        xml_attributes.update({
+            "id": link.id,
+            "from": link.from_node,
+            "to": link.to_node,
+            "length": _format_number(link.length),
+            "freespeed": _format_number(link.freespeed),
+            "capacity": _format_number(link.capacity),
+            "permlanes": _format_number(link.permlanes),
+            "modes": ",".join(sorted(link.allowed_modes)),
+        })
+
+        link_element = etree.SubElement(links_element, "link", **xml_attributes)
+        _write_attributes(link_element, link.attributes)
+
+    tree = etree.ElementTree(root)
+
+    doctype = '<!DOCTYPE network SYSTEM "http://www.matsim.org/files/dtd/network_v2.dtd">'
+
+    if path.suffix == ".gz":
+        with gzip.open(path, "wb") as file:
+            tree.write(
+                file,
+                encoding="UTF-8",
+                xml_declaration=True,
+                doctype=doctype,
+                pretty_print=True,
+            )
+    else:
+        tree.write(
+            str(path),
+            encoding="UTF-8",
+            xml_declaration=True,
+            doctype=doctype,
+            pretty_print=True,
+        )
+
 
 
 # ---------------------------------------------------------------------
@@ -305,3 +381,48 @@ def _open_xml(path: Path):
         return gzip.open(path, "rb")
 
     return path.open("rb")
+
+def _write_attributes(parent: etree._Element, attributes: dict[str, Any]) -> None:
+    """Write MATSim typed attributes."""
+
+    if not attributes:
+        return
+
+    attributes_element = etree.SubElement(parent, "attributes")
+
+    for name, value in attributes.items():
+        attribute = etree.SubElement(
+            attributes_element,
+            "attribute",
+            name=name,
+            **{"class": _attribute_class(value)},
+        )
+        attribute.text = _attribute_text(value)
+
+
+def _attribute_class(value: Any) -> str:
+    """Return the MATSim Java class for a Python value."""
+
+    if isinstance(value, bool):
+        return "java.lang.Boolean"
+    if isinstance(value, int):
+        return "java.lang.Integer"
+    if isinstance(value, float):
+        return "java.lang.Double"
+
+    return "java.lang.String"
+
+
+def _attribute_text(value: Any) -> str:
+    """Convert a Python value to MATSim attribute text."""
+
+    if isinstance(value, bool):
+        return str(value).lower()
+
+    return str(value)
+
+
+def _format_number(value: float) -> str:
+    """Format numeric MATSim XML values compactly."""
+
+    return f"{value:.15g}"
