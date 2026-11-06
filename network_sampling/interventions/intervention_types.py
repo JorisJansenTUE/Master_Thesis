@@ -14,7 +14,7 @@ class InterventionType(Enum):
 
 class RoadSpaceVariant(Enum):
     KEEP_CAR = "keep_car"
-    CLOSE_CAR = "close_car"
+    REMOVE_CAR = "remove_car"
     REMOVE_ONE_LANE = "remove_one_lane"
 
 
@@ -37,11 +37,11 @@ class Intervention:
     road_space_variant
         Change to car road space required to create the intervention. This is for PBL and Buslane interventions only as this often involves removing a lane for cars
 
-    target_link_id
-        Directional MATSim car link affected by the intervention:
+    target_link_ids
+        Directional MATSim car links affected by the intervention:
         - DEDICATED_BUS_LANE → direction in which bus lane is created AND road_space_variant is applied;
-        - PBL: REMOVE_ONE_LANE → direction losing a lane;
-        - PBL: CLOSE_CAR → direction losing car access;
+        - PBL: REMOVE_ONE_LANE → directions losing a lane;
+        - PBL: CLOSE_CAR → directions losing car access;
         - non-directional intervention → None.
    
     """
@@ -49,4 +49,4 @@ class Intervention:
     segment_id: str
     intervention_type: InterventionType
     road_space_variant: RoadSpaceVariant | None = None
-    target_link_id: str | None = None
+    target_link_ids: tuple[str, ...] = ()

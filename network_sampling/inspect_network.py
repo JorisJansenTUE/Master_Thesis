@@ -306,7 +306,6 @@ def inspect_network(
     mode_counts = Counter()
 
     for link in network.links.values():
-
         for mode in link.allowed_modes:
             mode_counts[mode] += 1
 
