@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import replace
+from itertools import combinations
 
+from network_sampling.interventions.compatibility import interventions_compatible
 from network_sampling.interventions.eligibility import BUS_LANE_WIDTH_M, PBL_WIDTH_M
 from network_sampling.interventions.intervention_types import (
     Intervention,
@@ -327,12 +329,17 @@ def _validate_interventions(
     segment_index: StreetSegmentIndex,
     interventions: list[Intervention],
 ) -> None:
-    """Check that interventions refer to valid baseline segments and car links."""
+    """Check that selected interventions are valid and mutually compatible."""
 
-    segment_ids = [intervention.segment_id for intervention in interventions]
+    if len(interventions) != len(set(interventions)):
+        raise ValueError("The same intervention was selected more than once.")
 
-    if len(segment_ids) != len(set(segment_ids)):
-        raise ValueError("Only one intervention may be applied to each StreetSegment.")
+    for a, b in combinations(interventions, 2):
+        if not interventions_compatible(a, b, network):
+            raise ValueError(
+                f"Incompatible interventions on segment {a.segment_id}: "
+                f"{a.intervention_type.value} and {b.intervention_type.value}"
+            )
 
     for intervention in interventions:
         segment = segment_index.get(intervention.segment_id)
