@@ -31,6 +31,8 @@ WIDTH_ATTRIBUTE = "carriageway_width_m"
 
 BUDGET_M = 5000.0
 MAX_CORRIDOR_LENGTH_M = None
+INTRUSION_STRENGTH = 2.0
+PBL_WEIGHT_MULTIPLIER = 1.0
 SEEDS = range(50)
 
 
@@ -180,6 +182,8 @@ def main() -> None:
             candidates=eligible,
             budget_m=BUDGET_M,
             max_corridor_length_m=MAX_CORRIDOR_LENGTH_M,
+            intrusion_strength=INTRUSION_STRENGTH,
+            pbl_weight_multiplier=PBL_WEIGHT_MULTIPLIER,
             rng=random.Random(seed),
         )
 
@@ -247,6 +251,8 @@ def main() -> None:
             candidates=eligible,
             budget_m=BUDGET_M,
             max_corridor_length_m=MAX_CORRIDOR_LENGTH_M,
+            intrusion_strength=INTRUSION_STRENGTH,
+            pbl_weight_multiplier=PBL_WEIGHT_MULTIPLIER,
             rng=random.Random(first_seed),
         )
         sample_b = sample_corridors(
@@ -256,6 +262,8 @@ def main() -> None:
             candidates=eligible,
             budget_m=BUDGET_M,
             max_corridor_length_m=MAX_CORRIDOR_LENGTH_M,
+            intrusion_strength=INTRUSION_STRENGTH,
+            pbl_weight_multiplier=PBL_WEIGHT_MULTIPLIER,
             rng=random.Random(first_seed),
         )
 
