@@ -21,6 +21,9 @@ DESTINATION_ATTRIBUTE = "destination_road"
 BICYCLE_STREET_ATTRIBUTE = "cyclestreet"
 WIDTH_ATTRIBUTE = "carriageway_width_m"
 
+BICYCLE_STREET_SPEED_M_S = 20.0 / 3.6
+DESTINATION_ONLY_SPEED_M_S = 30.0 / 3.6
+
 
 def apply_interventions(
     baseline_network: MatsimNetwork,
@@ -84,21 +87,78 @@ def apply_interventions(
 
 
 def _apply_destination_only(network: MatsimNetwork, segment: StreetSegment) -> None:
-    """Mark all car links on a street segment as destination-only."""
+    """Mark car links as destination-only and limit their free speed to 30 km/h."""
 
     for link in _car_links(network, segment):
         attributes = dict(link.attributes)
         attributes[DESTINATION_ATTRIBUTE] = "Yes"
-        network.links[link.id] = replace(link, attributes=attributes)
+
+        network.links[link.id] = replace(
+            link,
+            freespeed=DESTINATION_ONLY_SPEED_M_S,
+            attributes=attributes,
+        )
 
 
 def _apply_bicycle_street(network: MatsimNetwork, segment: StreetSegment) -> None:
-    """Mark all car links on a street segment as bicycle streets."""
+    """Create a bidirectional bicycle street, preserving existing car directions."""
 
-    for link in _car_links(network, segment):
+    car_links = _car_links(network, segment)
+
+    # Allow bicycles on every existing car link.
+    for link in car_links:
         attributes = dict(link.attributes)
         attributes[BICYCLE_STREET_ATTRIBUTE] = "yes"
-        network.links[link.id] = replace(link, attributes=attributes)
+
+        network.links[link.id] = replace(
+            link,
+            allowed_modes=frozenset(set(link.allowed_modes) | {"bike"}),
+            freespeed=BICYCLE_STREET_SPEED_M_S,
+            attributes=attributes,
+        )
+
+    # Determine which cycling directions exist on this physical segment.
+    bike_directions = {
+        (network.links[link_id].from_node, network.links[link_id].to_node)
+        for link_id in segment.link_ids
+        if "bike" in network.links[link_id].allowed_modes
+    }
+
+    # Add a bicycle-only reverse link when necessary.
+    for from_node, to_node in (
+        (segment.node_a, segment.node_b),
+        (segment.node_b, segment.node_a),
+    ):
+        if (from_node, to_node) in bike_directions:
+            continue
+
+        template = car_links[0]
+
+        attributes = dict(template.attributes)
+        attributes[BICYCLE_STREET_ATTRIBUTE] = "yes"
+
+        # This is a virtual reverse cycling connection, not extra road width.
+        attributes.pop(WIDTH_ATTRIBUTE, None)
+
+        link_id = _new_link_id(
+            network,
+            f"{segment.id}__bike__{from_node}__{to_node}",
+        )
+
+        network.links[link_id] = replace(
+            template,
+            id=link_id,
+            from_node=from_node,
+            to_node=to_node,
+            allowed_modes=frozenset({"bike"}),
+            freespeed=BICYCLE_STREET_SPEED_M_S,
+            permlanes=1.0,
+            capacity=template.capacity / template.permlanes,
+            attributes=attributes,
+            xml_attributes=dict(template.xml_attributes),
+        )
+
+        bike_directions.add((from_node, to_node))
 
 
 def _apply_pt_bike_street(network: MatsimNetwork, segment: StreetSegment) -> None:
