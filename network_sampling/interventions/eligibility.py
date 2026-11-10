@@ -14,8 +14,6 @@ from network_sampling.network.transit_usage import TransitUsageIndex
 
 # Placeholder values, to be finalized later.
 BICYCLE_STREET_MIN_WIDTH_M = 5.0
-PT_BIKE_STREET_MIN_WIDTH_ONE_WAY_BUS_M = 5.0
-PT_BIKE_STREET_MIN_WIDTH_TWO_WAY_BUS_M = 7.0
 
 LANE_WIDTH_M = 3.0
 PBL_WIDTH_M = 4.0
@@ -62,7 +60,6 @@ def get_eligible_interventions(
     interventions = [Intervention(segment.id, InterventionType.DESTINATION_ONLY)]
 
     interventions.extend(_bicycle_street(segment))
-    interventions.extend(_pt_bike_street(segment, transit_usage))
     interventions.extend(_bus_lanes(segment, car_links, network, transit_usage))
     interventions.extend(_protected_bike_lanes(segment, car_links, transit_usage))
 
@@ -76,37 +73,6 @@ def _bicycle_street(segment: StreetSegment) -> list[Intervention]:
         return []
 
     return [Intervention(segment.id, InterventionType.BICYCLE_STREET)]
-
-
-def _pt_bike_street(
-    segment: StreetSegment,
-    transit_usage: TransitUsageIndex,
-) -> list[Intervention]:
-    """
-    Return a PT+bicycle street intervention when width and PT use allow it.
-
-    A different minimum width is used depending on whether scheduled buses
-    traverse the segment in one or both directions.
-    """
-
-    if segment.total_width_m is None:
-        return []
-
-    bus_directions = transit_usage.directions(segment.id)
-
-    if not bus_directions:
-        return []
-
-    required_width = (
-        PT_BIKE_STREET_MIN_WIDTH_TWO_WAY_BUS_M
-        if len(bus_directions) > 1
-        else PT_BIKE_STREET_MIN_WIDTH_ONE_WAY_BUS_M
-    )
-
-    if segment.total_width_m < required_width:
-        return []
-
-    return [Intervention(segment.id, InterventionType.PT_BIKE_STREET)]
 
 
 def _bus_lanes(

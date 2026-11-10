@@ -9,7 +9,6 @@ class InterventionType(Enum):
     BICYCLE_STREET = "bicycle_street"
     DESTINATION_ONLY = "destination_only"
     DEDICATED_BUS_LANE = "dedicated_bus_lane"
-    PT_BIKE_STREET = "pt_bike_street"
 
 
 class RoadSpaceVariant(Enum):

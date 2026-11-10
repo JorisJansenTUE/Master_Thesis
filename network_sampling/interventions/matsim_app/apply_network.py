@@ -68,9 +68,6 @@ def apply_interventions(
         elif intervention.intervention_type == InterventionType.BICYCLE_STREET:
             _apply_bicycle_street(network, segment)
 
-        elif intervention.intervention_type == InterventionType.PT_BIKE_STREET:
-            _apply_pt_bike_street(network, segment)
-
         elif intervention.intervention_type == InterventionType.PROTECTED_BIKE_LANE:
             _apply_protected_bike_lane(network, segment, intervention)
 
@@ -160,18 +157,6 @@ def _apply_bicycle_street(network: MatsimNetwork, segment: StreetSegment) -> Non
 
         bike_directions.add((from_node, to_node))
 
-
-def _apply_pt_bike_street(network: MatsimNetwork, segment: StreetSegment) -> None:
-    """Remove general car traffic and retain bicycle and transit access."""
-
-    for link in _car_links(network, segment):
-        allowed_modes = set(link.allowed_modes) - GENERAL_CAR_MODES
-        allowed_modes.add("bike")
-
-        network.links[link.id] = replace(
-            link,
-            allowed_modes=allowed_modes,
-        )
 
 
 def _apply_protected_bike_lane(

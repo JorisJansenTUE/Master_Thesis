@@ -85,9 +85,6 @@ def intervention_weight(
 ) -> float:
     """Return the random sampling weight for an intervention."""
 
-    if intervention.intervention_type == InterventionType.PT_BIKE_STREET:
-        return WEIGHT_REMOVE_ALL_CAR
-
     variant = intervention.road_space_variant
 
     if variant is None or variant == RoadSpaceVariant.KEEP_CAR:
@@ -117,10 +114,9 @@ def _bike_candidate_allowed(
     """
     if intervention.intervention_type not in {
         InterventionType.PROTECTED_BIKE_LANE,
-        InterventionType.PT_BIKE_STREET,
+        InterventionType.BICYCLE_STREET,
     }:
         return True
-
     segment = segment_index.get(intervention.segment_id)
 
     # Street already carries bicycle traffic.
