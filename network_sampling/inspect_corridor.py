@@ -31,8 +31,8 @@ WIDTH_ATTRIBUTE = "carriageway_width_m"
 
 BUDGET_M = 5000.0
 MAX_CORRIDOR_LENGTH_M = None
-INTRUSION_STRENGTH = 2.0
-PBL_WEIGHT_MULTIPLIER = 1.0
+INTRUSION_STRENGTH = 0.5
+PBL_WEIGHT_MULTIPLIER = 3.0
 SEEDS = range(50)
 
 
@@ -163,6 +163,7 @@ def main() -> None:
     )
     print(f"Maximum corridor length: {max_length_label}")
 
+    type_lengths = Counter()
     total_type_counts = Counter()
     total_variant_counts = Counter()
     valid_samples = 0
@@ -195,6 +196,11 @@ def main() -> None:
 
         components = count_physical_components(selected, segment_index)
         component_counts.append(components)
+
+        for iv in selected:
+            type_lengths[iv.intervention_type.value] += (
+                segment_index.get(iv.segment_id).length_m
+            )
 
         modified, bus_replacements = apply_interventions(
             baseline,
@@ -310,6 +316,18 @@ def main() -> None:
             f"{variant:<25} "
             f"{count:>5,} total | "
             f"{count / number_samples:>5.1f} per sample"
+        )
+
+
+    # At the end:
+    print("\nIntervention lengths")
+    print("--------------------")
+
+    for kind, length in sorted(type_lengths.items()):
+        print(
+            f"{kind:<25} "
+            f"{length / len(SEEDS):>7.1f} m per scenario | "
+            f"{100 * length / sum(type_lengths.values()):>5.1f}%"
         )
 
 
