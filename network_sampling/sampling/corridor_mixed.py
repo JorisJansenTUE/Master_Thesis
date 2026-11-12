@@ -7,7 +7,7 @@ Neither the baseline MATSim network nor the physical graph is modified.
 from __future__ import annotations
 
 import random
-from collections import defaultdict
+from collections import Counter, defaultdict
 from math import isfinite, sqrt
 
 import networkx as nx
@@ -16,12 +16,11 @@ from network_sampling.interventions.compatibility import interventions_compatibl
 from network_sampling.interventions.intervention_types import (
     Intervention, InterventionType, RoadSpaceVariant,
 )
-from network_sampling.interventions.matsim_app.apply_network import apply_interventions
 from network_sampling.network.matsim_network import MatsimNetwork
 from network_sampling.network.street_segments import StreetSegmentIndex
 from network_sampling.network.transit_usage import TransitUsageIndex
 from network_sampling.sampling.random import WEIGHT_KEEP_CAR, intervention_weight
-from network_sampling.validation.connectivity import check_connectivity
+from network_sampling.validation.connectivity import build_mode_graph
 
 
 BIKE_TYPES = {InterventionType.PROTECTED_BIKE_LANE, InterventionType.BICYCLE_STREET}
@@ -39,10 +38,60 @@ def _is_protected_bike_link(link) -> bool:
     )
 
 
-def _car_connected(network, index, removals) -> bool:
-    """Apply cumulative removal candidates; use the existing car validator."""
-    modified, _ = apply_interventions(network, index, removals)
-    return check_connectivity(network, modified)["car"]
+class _CarState:
+    """Incremental directed car connectivity; baseline MATSim is read only.
+
+    ``support[(u, v)]`` counts car-permitted MATSim links with these endpoints,
+    so a parallel directed graph edge is removed only after its last link.
+    """
+
+    def __init__(self, network: MatsimNetwork):
+        self.graph = build_mode_graph(network, "car")
+        if not nx.is_strongly_connected(self.graph):
+            raise ValueError("Baseline car network is not strongly connected")
+        self.links = {
+            lid: (link.from_node, link.to_node)
+            for lid, link in network.links.items()
+            if "car" in link.allowed_modes
+        }
+        self.support = Counter(self.links.values())
+        self.removed: set[str] = set()
+
+    def copy(self) -> "_CarState":
+        state = object.__new__(_CarState)
+        state.graph = self.graph.copy()
+        state.links = self.links  # Immutable baseline mapping, shared by copies.
+        state.support = self.support.copy()
+        state.removed = self.removed.copy()
+        return state
+
+    def try_intervention(self, iv: Intervention) -> bool:
+        """Commit REMOVE_CAR when strongly connected; otherwise undo it."""
+        if iv.road_space_variant != RoadSpaceVariant.REMOVE_CAR:
+            return True
+
+        targets = set(iv.target_link_ids)
+        if any(lid in self.removed for lid in targets):
+            return False
+        affected = Counter(self.links[lid] for lid in targets if lid in self.links)
+        if any(self.support[edge] < count for edge, count in affected.items()):
+            return False
+
+        removed_edges = []
+        for edge, count in affected.items():
+            self.support[edge] -= count
+            if self.support[edge] == 0:
+                self.graph.remove_edge(*edge)
+                removed_edges.append(edge)
+
+        if nx.is_strongly_connected(self.graph):
+            self.removed.update(targets)
+            return True
+
+        for edge, count in affected.items():
+            self.support[edge] += count
+        self.graph.add_edges_from(removed_edges)
+        return False
 
 
 def sample_corridors(
@@ -78,9 +127,10 @@ def sample_corridors(
     rng = rng if rng is not None else random.Random()
     preselected = list(preselected or [])
     occupied = {iv.segment_id for iv in preselected}
-    accepted_removals = [
-        iv for iv in preselected if iv.road_space_variant == RoadSpaceVariant.REMOVE_CAR
-    ]
+    car = _CarState(network)
+    for iv in preselected:
+        if not car.try_intervention(iv):
+            raise ValueError("Preselected interventions disconnect the car graph")
 
     by_segment = defaultdict(list)
     for iv in candidates:
@@ -188,7 +238,8 @@ def sample_corridors(
             visited.add(next_node)
             length_m += index.get(sid).length_m
 
-        pending, pending_removals = [], []
+        pending = []
+        trial_car = car.copy()
         previous_type = None
         blocked_sid = None
 
@@ -209,9 +260,7 @@ def sample_corridors(
                     if other.segment_id == sid
                 ):
                     continue
-                if iv.road_space_variant == RoadSpaceVariant.REMOVE_CAR and not _car_connected(
-                    network, index, accepted_removals + pending_removals + [iv]
-                ):
+                if not trial_car.try_intervention(iv):
                     continue
                 chosen = iv
                 break
@@ -219,8 +268,6 @@ def sample_corridors(
                 blocked_sid = sid
                 break
             pending.append(chosen)
-            if chosen.road_space_variant == RoadSpaceVariant.REMOVE_CAR:
-                pending_removals.append(chosen)
             previous_type = chosen.intervention_type
 
         if blocked_sid is not None:
@@ -229,7 +276,7 @@ def sample_corridors(
             continue
 
         selected.extend(pending)
-        accepted_removals.extend(pending_removals)
+        car = trial_car
         spent += length_m
         for iv in pending:
             seg = index.get(iv.segment_id)
@@ -239,7 +286,6 @@ def sample_corridors(
             available.remove_edge(seg.node_a, seg.node_b, key=sid)
 
     return selected
-
 
 
 def sample_bus_corridors(
@@ -254,23 +300,19 @@ def sample_bus_corridors(
     max_corridor_length_m: float | None = 1500.0,
     min_links: int = 3,
 ) -> list[Intervention]:
-    """Grow directional bus-lane corridors along scheduled bus routes.
+    """Grow directional bus-lane chains along scheduled route sequences.
 
-    Each bus-lane intervention consumes its segment's full length,
-    including opposite directions on the same street.
-
-    If a variant fails connectivity, alternatives are tried.
-    If no feasible variant remains, retain the valid corridor prefix
-    when it contains at least min_links interventions.
+    Each bus-lane intervention consumes its segment's full length, including
+    opposite directions on the same street. A connectivity failure ends the
+    current chain only when no compatible, connectivity-safe variant remains.
+    Retain its feasible prefix if len(prefix) >= min_links, then start another.
     """
     if not isfinite(budget_m) or budget_m < 0:
         raise ValueError("Bus budget must be finite and nonnegative")
-
     if max_corridor_length_m is not None and (
         not isfinite(max_corridor_length_m) or max_corridor_length_m <= 0
     ):
         raise ValueError("Invalid max_corridor_length_m")
-
     if min_links < 1:
         raise ValueError("min_links must be positive")
 
@@ -278,67 +320,48 @@ def sample_bus_corridors(
         iv.segment_id for iv in selected
         if iv.intervention_type != InterventionType.DEDICATED_BUS_LANE
     }
-
     taken = {
         iv.target_link_ids[0] for iv in selected
         if iv.intervention_type == InterventionType.DEDICATED_BUS_LANE
     }
-
-    # Group eligible bus-lane variants by directional MATSim link.
     by_link = defaultdict(list)
-
     for iv in candidates:
         if iv.intervention_type != InterventionType.DEDICATED_BUS_LANE:
             continue
-
         if len(iv.target_link_ids) != 1:
             raise ValueError(f"Bus lane must target one directional link: {iv}")
-
         lid = iv.target_link_ids[0]
-
-        if (
-            iv.segment_id not in occupied
-            and lid not in taken
-            and lid in network.links
-        ):
+        if iv.segment_id not in occupied and lid not in taken and lid in network.links:
             by_link[lid].append(iv)
 
     if not by_link or budget_m == 0:
         return []
 
-    # ---------------------------------------------------------
-    # Build eligible consecutive sections of scheduled bus routes
-    # ---------------------------------------------------------
-
+    # Split scheduled routes at ineligible, repeated or disconnected links.
+    # Unlike graph-based growth, these chains cannot jump between bus services.
     runs = []
     seen_runs = set()
 
     def add_run(run):
         key = tuple(run)
-
         if len(key) >= min_links and key not in seen_runs:
             seen_runs.add(key)
             runs.append(key)
 
     for _, route in sorted(transit_usage.bus_routes.items()):
         run = []
-
         for lid in route:
             if lid not in by_link:
                 add_run(run)
                 run = []
                 continue
-
             if run and (
                 lid in run
-                or network.links[run[-1]].to_node
-                != network.links[lid].from_node
+                or network.links[run[-1]].to_node != network.links[lid].from_node
             ):
                 add_run(run)
                 run = []
-
             run.append(lid)
-
         add_run(run)
 
     if not runs:
@@ -348,50 +371,31 @@ def sample_bus_corridors(
         lid: index.get(options[0].segment_id).length_m
         for lid, options in by_link.items()
     }
-
-    active = set(by_link)
-    attempted = set()
-
+    active = set(by_link)  # Directional links not yet selected or blocked.
+    attempted = set()      # (route index, position, direction) to avoid retries.
+    car = _CarState(network)
+    for iv in selected:
+        if not car.try_intervention(iv):
+            raise ValueError("Preselected interventions disconnect the car graph")
     result = []
     remaining = budget_m
 
-    # ---------------------------------------------------------
-    # Sample bus corridors until no feasible starts remain
-    # ---------------------------------------------------------
-
     while remaining > 1e-9:
-        limit = min(
-            remaining,
-            max_corridor_length_m or remaining,
-        )
+        limit = min(remaining, max_corridor_length_m or remaining)
 
-        # Find starting positions with at least min_links
-        # consecutive eligible directional links.
+        # Only start where at least min_links consecutive eligible directional
+        # links could fit. This prevents useless very short chain attempts.
         starts = []
-
         for route_idx, run in enumerate(runs):
             for direction in (1, -1):
                 for pos in range(len(run)):
                     start_key = (route_idx, pos, direction)
-
                     if start_key in attempted:
                         continue
-
-                    positions = range(
-                        pos,
-                        pos + direction * min_links,
-                        direction,
-                    )
-
-                    if not all(
-                        0 <= i < len(run) and run[i] in active
-                        for i in positions
-                    ):
+                    positions = range(pos, pos + direction * min_links, direction)
+                    if not all(0 <= i < len(run) and run[i] in active for i in positions):
                         continue
-
-                    if sum(
-                        lengths[run[i]] for i in positions
-                    ) <= limit + 1e-9:
+                    if sum(lengths[run[i]] for i in positions) <= limit + 1e-9:
                         starts.append(start_key)
 
         if not starts:
@@ -399,78 +403,49 @@ def sample_bus_corridors(
 
         route_idx, pos, direction = rng.choice(starts)
         attempted.add((route_idx, pos, direction))
-
         run = runs[route_idx]
         pending = []
+        trial_car = car.copy()
         spent = 0.0
         failed_link = None
 
-        # -----------------------------------------------------
-        # Extend the selected bus corridor
-        # -----------------------------------------------------
-
+        # Extend along the chosen route. Try safer variants before ending
+        # the chain at a link that cannot preserve car connectivity.
         while 0 <= pos < len(run):
             lid = run[pos]
             cost = lengths[lid]
-
-            if (
-                lid not in active
-                or spent + cost > limit + 1e-9
-            ):
+            if lid not in active or spent + cost > limit + 1e-9:
                 break
 
             options = by_link[lid]
-
-            # Weighted random ordering without replacement.
             order = sorted(
                 options,
-                key=lambda iv: rng.expovariate(
-                    intervention_weight(iv, index, network)
-                ),
+                key=lambda iv: rng.expovariate(intervention_weight(iv, index, network)),
             )
-
             chosen = None
-
-            # Include already accepted interventions and the
-            # currently growing corridor.
             previous = selected + result + pending
 
             for iv in order:
-                # Never select the same intervention twice.
+                # Never select the same intervention twice, even when
+                # multiple scheduled bus routes share a directional link.
                 if iv in previous:
                     continue
-
-                # Respect compatibility, including the special
-                # case of opposite-direction dedicated bus lanes.
                 if not all(
                     interventions_compatible(iv, other, network)
                     for other in previous
                 ):
                     continue
 
-                if iv.road_space_variant == RoadSpaceVariant.REMOVE_CAR:
-                    # Build the cumulative set of car-removing
-                    # interventions without duplicates.
-                    trial = list(dict.fromkeys(
-                        other for other in previous
-                        if other.road_space_variant
-                        == RoadSpaceVariant.REMOVE_CAR
-                    ))
-
-                    trial.append(iv)
-
-                    if not _car_connected(network, index, trial):
-                        # This variant disconnects the car network.
-                        # Try another eligible variant.
-                        continue
+                if not trial_car.try_intervention(iv):
+                    # Try another eligible variant before ending the chain.
+                    continue
 
                 chosen = iv
                 break
 
             if chosen is None:
-                # All variants were exhausted.
-                # Terminate this corridor but retain its prefix
-                # if it contains at least min_links interventions.
+                # No compatible, connectivity-safe variant remains.
+                # Keep a valid prefix only if it reaches min_links.
                 failed_link = lid
                 break
 
@@ -478,36 +453,21 @@ def sample_bus_corridors(
             spent += cost
             pos += direction
 
-        # -----------------------------------------------------
-        # Handle failed connectivity / compatibility
-        # -----------------------------------------------------
-
         if failed_link is not None:
-            # Prevent repeatedly attempting this link during
-            # the current scenario.
-            # Other parts of the route remain available.
+            # A failed link cannot extend another chain in this scenario.
+            # Other parts of this same route can still form new chains.
             active.discard(failed_link)
 
-        # Discard corridors that are too short.
-        # Their interventions are not committed.
         if len(pending) < min_links:
+            # Discard short prefixes without committing their car removals.
             continue
 
-        # -----------------------------------------------------
-        # Accept the completed or partially completed corridor
-        # -----------------------------------------------------
-
         result.extend(pending)
+        car = trial_car
         remaining -= spent
-
-        # Prevent selecting directional links more than once.
-        active.difference_update(
-            iv.target_link_ids[0]
-            for iv in pending
-        )
+        active.difference_update(iv.target_link_ids[0] for iv in pending)
 
     return result
-
 
 
 def sample_destination_roads(
