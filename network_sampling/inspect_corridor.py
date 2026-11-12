@@ -13,6 +13,7 @@ from network_sampling.network.matsim_network import load_matsim_network
 from network_sampling.network.street_segments import StreetSegmentIndex
 from network_sampling.network.transit_usage import TransitUsageIndex
 from network_sampling.sampling.corridor import sample_corridors
+from network_sampling.sampling.corridor_mixed import sample_corridor_package
 from network_sampling.sampling.random import intervention_length
 from network_sampling.validation.connectivity import check_connectivity
 
@@ -176,18 +177,21 @@ def main() -> None:
     print("----------------")
 
     for seed in SEEDS:
-        selected = sample_corridors(
+        selected = sample_corridor_package(
             graph=physical_graph,
             index=segment_index,
             network=baseline,
             candidates=eligible,
-            budget_m=BUDGET_M,
-            max_corridor_length_m=MAX_CORRIDOR_LENGTH_M,
-            intrusion_strength=INTRUSION_STRENGTH,
-            pbl_weight_multiplier=PBL_WEIGHT_MULTIPLIER,
-            rng=random.Random(seed),
+            transit_usage=transit_usage,
+            budget_m=5000.0,
+            seed=seed,
+            destination_share=0.10,
+            bus_share=0.15,
+            max_corridor_length_m=None,
+            max_bus_corridor_length_m=1500.0,
+            intrusion_strength=0.5,
+            pbl_weight_multiplier=3.0,
         )
-
         used_budget = intervention_length(selected, segment_index)
         assert used_budget <= BUDGET_M + 1e-6, "Corridor budget exceeded"
 
