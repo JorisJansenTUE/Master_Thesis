@@ -269,6 +269,7 @@ def sample_clusters(
     seed: int | None = None,
     max_cluster_length_m: float | None = 1000.0,
     pbl_weight_multiplier: float = 3.0,
+    destination_weight_multiplier: float = 1.0,
     max_failed_attempts: int = 60,
 ) -> list[Intervention]:
     """Sample physically connected multimodal clusters using graph-only checks.
@@ -290,18 +291,22 @@ def sample_clusters(
         raise ValueError("max_cluster_length_m must be finite and positive")
     if not isfinite(pbl_weight_multiplier) or pbl_weight_multiplier <= 0:
         raise ValueError("pbl_weight_multiplier must be finite and positive")
+    if not isfinite(destination_weight_multiplier) or destination_weight_multiplier <= 0:
+        raise ValueError("destination_weight_multiplier must be finite and positive")
     if max_failed_attempts < 1:
         raise ValueError("max_failed_attempts must be positive")
+
+    type_multiplier = {
+        InterventionType.PROTECTED_BIKE_LANE: pbl_weight_multiplier,
+        InterventionType.DESTINATION_ONLY: destination_weight_multiplier,}
 
     rng = random.Random(seed)
     by_segment = defaultdict(list)
     for iv in candidates:
         if iv.intervention_type == InterventionType.DEDICATED_BUS_LANE and len(iv.target_link_ids) != 1:
             raise ValueError(f"Bus lane must target one directional link: {iv}")
-        weight = intervention_weight(iv, index, network) * (
-            pbl_weight_multiplier
-            if iv.intervention_type == InterventionType.PROTECTED_BIKE_LANE else 1.0
-        )
+        
+        weight = intervention_weight(iv, index, network) * (type_multiplier.get(iv.intervention_type, 1.0))
         if weight <= 0 or not isfinite(weight):
             raise ValueError(f"Invalid weight for intervention {iv}: {weight}")
         by_segment[iv.segment_id].append((iv, weight))

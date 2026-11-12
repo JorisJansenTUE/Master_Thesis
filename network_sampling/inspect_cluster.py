@@ -30,7 +30,8 @@ WIDTH_ATTRIBUTE = "carriageway_width_m"
 
 BUDGET_M = 5000.0
 MAX_CLUSTER_LENGTH_M = 1000.0  # None = unlimited
-PBL_WEIGHT_MULTIPLIER = 1
+PBL_WEIGHT_MULTIPLIER = 3
+DESTINATION_WEIGHT_MULTIPLIER = 0.25
 MAX_FAILED_ATTEMPTS = 60
 
 SEEDS = range(50)
@@ -92,6 +93,7 @@ def sample(seed, graph, index, network, eligible):
         seed=seed,
         max_cluster_length_m=MAX_CLUSTER_LENGTH_M,
         pbl_weight_multiplier=PBL_WEIGHT_MULTIPLIER,
+        destination_weight_multiplier=DESTINATION_WEIGHT_MULTIPLIER,
         max_failed_attempts=MAX_FAILED_ATTEMPTS,
     )
 
@@ -133,6 +135,7 @@ def main() -> None:
         )
     )
     print(f"PBL weight multiplier:   {PBL_WEIGHT_MULTIPLIER:.1f}")
+    print(f"Destination weight multiplier: {DESTINATION_WEIGHT_MULTIPLIER:.1f}")
 
     type_counts = Counter()
     variant_counts = Counter()
