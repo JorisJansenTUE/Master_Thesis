@@ -88,7 +88,7 @@ def _apply_destination_only(network: MatsimNetwork, segment: StreetSegment) -> N
 
     for link in _car_links(network, segment):
         attributes = dict(link.attributes)
-        attributes[DESTINATION_ATTRIBUTE] = "Yes"
+        attributes[DESTINATION_ATTRIBUTE] = "True"
 
         network.links[link.id] = replace(
             link,
@@ -105,7 +105,7 @@ def _apply_bicycle_street(network: MatsimNetwork, segment: StreetSegment) -> Non
     # Allow bicycles on every existing car link.
     for link in car_links:
         attributes = dict(link.attributes)
-        attributes[BICYCLE_STREET_ATTRIBUTE] = "yes"
+        attributes[BICYCLE_STREET_ATTRIBUTE] = "True"
 
         network.links[link.id] = replace(
             link,
@@ -132,7 +132,7 @@ def _apply_bicycle_street(network: MatsimNetwork, segment: StreetSegment) -> Non
         template = car_links[0]
 
         attributes = dict(template.attributes)
-        attributes[BICYCLE_STREET_ATTRIBUTE] = "yes"
+        attributes[BICYCLE_STREET_ATTRIBUTE] = True
 
         # This is a virtual reverse cycling connection, not extra road width.
         attributes.pop(WIDTH_ATTRIBUTE, None)
@@ -309,7 +309,7 @@ def _make_pbl_link(
     """Create or convert a MATSim link representing a protected bicycle lane."""
 
     attributes = dict(template.attributes)
-    attributes["highway"] = "bicycle_designated"
+    attributes["osm:way:highway"] = "cycleway"
     attributes["protected_bike_lane"] = "yes"
     attributes[WIDTH_ATTRIBUTE] = PBL_WIDTH_M / 2
 

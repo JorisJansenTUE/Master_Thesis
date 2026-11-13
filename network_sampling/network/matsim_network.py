@@ -54,6 +54,12 @@ class MatsimNetwork:
     # Optional network-level attributes
     attributes: dict[str, Any] = field(default_factory=dict)
 
+@dataclass(frozen=True)
+class RawJavaAttribute:
+    """Preserve MATSim attributes with non-standard Java types."""
+    java_class: str
+    text: str
+
 
 # ---------------------------------------------------------------------
 # MATSim XML loading and Writing
@@ -340,7 +346,13 @@ def _convert_attribute(
     if class_name == "java.lang.Boolean":
         return value.lower() == "true"
 
-    return value
+    if class_name == "java.lang.String":
+        return value
+
+    return RawJavaAttribute(
+        java_class=class_name,
+        text=value,
+    )
 
 
 def _validate_link_nodes(
@@ -404,6 +416,8 @@ def _write_attributes(parent: etree._Element, attributes: dict[str, Any]) -> Non
 def _attribute_class(value: Any) -> str:
     """Return the MATSim Java class for a Python value."""
 
+    if isinstance(value, RawJavaAttribute):
+        return value.java_class
     if isinstance(value, bool):
         return "java.lang.Boolean"
     if isinstance(value, int):
@@ -416,7 +430,9 @@ def _attribute_class(value: Any) -> str:
 
 def _attribute_text(value: Any) -> str:
     """Convert a Python value to MATSim attribute text."""
-
+    if isinstance(value, RawJavaAttribute):
+        return value.text
+    
     if isinstance(value, bool):
         return str(value).lower()
 
