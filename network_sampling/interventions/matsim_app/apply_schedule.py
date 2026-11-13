@@ -60,6 +60,19 @@ def apply_bus_lane_replacements(
         if route_changed:
             replaced_routes += 1
 
+    # Update stop facilities on links replaced by dedicated bus lanes.
+    replaced_stops = 0
+
+    for stop_facility in tree.iterfind(".//transitStops/stopFacility"):
+        old_link_id = stop_facility.get("linkRefId")
+
+        if old_link_id in used_replacements:
+            stop_facility.set(
+                "linkRefId",
+                bus_link_replacements[old_link_id],
+            )
+            replaced_stops += 1
+
     missing = set(bus_link_replacements) - used_replacements
 
     if missing:
@@ -72,6 +85,7 @@ def apply_bus_lane_replacements(
 
     print(f"Bus routes modified: {replaced_routes:,}")
     print(f"Route link references replaced: {replaced_links:,}")
+    print(f"Stop facilities updated: {replaced_stops:,}")
 
 
 def _read_xml(path: Path) -> etree._ElementTree:
