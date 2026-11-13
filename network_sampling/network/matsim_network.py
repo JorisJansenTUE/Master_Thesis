@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 import gzip
+import math
 
 from lxml import etree
 
@@ -419,10 +420,18 @@ def _attribute_text(value: Any) -> str:
     if isinstance(value, bool):
         return str(value).lower()
 
+    if isinstance(value, float) and not math.isfinite(value):
+        return _format_number(value)
+
     return str(value)
 
-
 def _format_number(value: float) -> str:
-    """Format numeric MATSim XML values compactly."""
+    """Format numeric values for MATSim XML (Java-compatible)."""
+
+    if math.isnan(value):
+        raise ValueError("NaN is not allowed in MATSim network XML")
+
+    if math.isinf(value):
+        return "Infinity" if value > 0 else "-Infinity"
 
     return f"{value:.15g}"
