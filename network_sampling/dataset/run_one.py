@@ -95,10 +95,24 @@ def run(args: argparse.Namespace):
     env = os.environ.copy()
     env["eqasim_configurator"] = EQASIM_CONFIGURATOR
     threads = f"-XX:ActiveProcessorCount={args.threads}"
+    # reset_command = [
+    #     args.java, f"-Xmx{args.reset_heap}", threads, "-cp", str(jar),
+    #     ROUTE_RESET_MAIN, str(network), str(population), str(checked_population),
+    # ]
     reset_command = [
-        args.java, f"-Xmx{args.reset_heap}", threads, "-cp", str(jar),
-        ROUTE_RESET_MAIN, str(network), str(population), str(checked_population),
+        "java",
+        "-Xmx24G",
+        "-XX:ActiveProcessorCount=24",
+        "-cp", str(jar),
+        "org.thesis.PrepareInterventionPopulation",
+        str(base_config),
+        str(scenario / "network.xml.gz"),
+        str(scenario / "transit_schedule.xml.gz"),
+        str(population),
+        str(scenario / "population_routechecked.xml.gz"),
     ]
+
+
     simulation_command = [
         args.java, f"-Xms{args.initial_heap}", f"-Xmx{args.heap}",
         threads, "-cp", str(jar), SIMULATION_MAIN,
