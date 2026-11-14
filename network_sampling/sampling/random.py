@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import networkx as nx
 
 from network_sampling.interventions.compatibility import interventions_compatible
 from network_sampling.interventions.intervention_types import (
@@ -60,6 +61,10 @@ def sample_random(
     selected: list[Intervention] = []
     used_budget = 0.0
 
+    # Maintain directed car/truck graphs throughout sampling.
+    # These are constructed only once.
+    car_graphs = _build_car_graphs(network)
+
     for candidate in candidates:
         cost = segment_index.get(candidate.segment_id).length_m
 
@@ -71,6 +76,13 @@ def sample_random(
             for existing in selected
         ):
             continue
+
+        # Only REMOVE_CAR interventions can disconnect the road network.
+        # The function updates the graphs if accepted and restores them
+        # if connectivity would be lost.
+        if candidate.road_space_variant == RoadSpaceVariant.REMOVE_CAR:
+            if not _try_remove_car_links(candidate, network, car_graphs):
+                continue
 
         selected.append(candidate)
         used_budget += cost
@@ -151,6 +163,86 @@ def _removes_all_car(
     }
 
     return car_directions <= removed_directions
+
+def _build_car_graphs(
+    network: MatsimNetwork,
+) -> dict[str, nx.MultiDiGraph]:
+    """
+    Build directed car and truck graphs once.
+
+    MultiDiGraph preserves parallel MATSim links, so removing one
+    link does not accidentally remove another link with the same
+    endpoints.
+    """
+    graphs = {
+        "car": nx.MultiDiGraph(),
+        "truck": nx.MultiDiGraph(),
+    }
+
+    for link_id, link in network.links.items():
+        for mode, graph in graphs.items():
+            if mode in link.allowed_modes:
+                graph.add_edge(
+                    link.from_node,
+                    link.to_node,
+                    key=link_id,
+                )
+
+    return graphs
+
+
+def _try_remove_car_links(
+    intervention: Intervention,
+    network: MatsimNetwork,
+    graphs: dict[str, nx.MultiDiGraph],
+) -> bool:
+    """
+    Tentatively remove car/truck links from the current graphs.
+
+    Accept only if an alternative directed path remains between
+    the endpoints of every removed link.
+
+    If accepted, the graphs remain modified.
+    If rejected, all removed links are restored.
+
+    This preserves the baseline network's existing directed
+    reachability without requiring a full connectivity check.
+    """
+    removed = []
+
+    # Apply candidate removals temporarily.
+    for link_id in intervention.target_link_ids:
+        link = network.links[link_id]
+
+        u = link.from_node
+        v = link.to_node
+
+        for mode, graph in graphs.items():
+            if graph.has_edge(u, v, key=link_id):
+                graph.remove_edge(u, v, key=link_id)
+                removed.append((mode, u, v, link_id))
+
+    # Check only the removed connections.
+    valid = True
+
+    for mode, u, v, _ in removed:
+        graph = graphs[mode]
+
+        # Another parallel link still connects these nodes.
+        if graph.has_edge(u, v):
+            continue
+
+        # Otherwise check whether a directed alternative exists.
+        if not nx.has_path(graph, u, v):
+            valid = False
+            break
+
+    if not valid:
+        # Roll back this candidate.
+        for mode, u, v, link_id in removed:
+            graphs[mode].add_edge(u, v, key=link_id)
+
+    return valid
 
 
 def intervention_length(
