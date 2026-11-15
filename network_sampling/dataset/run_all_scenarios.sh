@@ -58,8 +58,13 @@ DATASET="$(readlink -f "$1")"
 CONFIG="$(readlink -f "$2")"
 POPULATION="$(readlink -f "$3")"
 JAR="$(readlink -f "$4")"
-PYTHON="$5" #Preserve virtualenv path if provided, otherwise make absolute.
-if [[ "$PYTHON" != /* ]]; then
+PYTHON="$5"
+
+if [[ "$PYTHON" != */* ]]; then
+    # Python command such as "python" or "python3"
+    PYTHON="$(command -v "$PYTHON")"
+elif [[ "$PYTHON" != /* ]]; then
+    # Relative path such as ".venv/bin/python"
     PYTHON="$PWD/$PYTHON"
 fi
 MAX_PARALLEL="${6:-3}"
