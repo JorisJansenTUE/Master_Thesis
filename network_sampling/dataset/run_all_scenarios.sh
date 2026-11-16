@@ -139,5 +139,4 @@ sbatch \
     --output="$DATASET/slurm_logs/%A_%a.out" \
     --error="$DATASET/slurm_logs/%A_%a.err" \
     --array="0-$((N - 1))%$MAX_PARALLEL" \
-    --chdir="$PROJECT_ROOT" \
     "$SCRIPT" --worker "$MANIFEST" "$CONFIG" "$POPULATION" "$JAR" "$PYTHON" "${FLAGS[@]}"
