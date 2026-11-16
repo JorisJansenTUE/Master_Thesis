@@ -44,7 +44,7 @@ if [[ "${1:-}" == "--worker" ]]; then
         --population "$POPULATION" \
         --jar "$JAR" \
         --threads 2 \
-        --heap 12G \
+        --heap 4G \
         --reset-heap 8G \
         --last-iteration 100 \
         "${FLAGS[@]}"
