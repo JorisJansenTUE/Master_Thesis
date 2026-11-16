@@ -46,7 +46,7 @@ if [[ "${1:-}" == "--worker" ]]; then
         --threads "${SLURM_CPUS_PER_TASK:-24}" \
         --heap "${MATSIM_HEAP:-96G}" \
         --reset-heap "${MATSIM_RESET_HEAP:-24G}" \
-        --last-iteration "${MATSIM_LAST_ITERATION:-5}" \
+        --last-iteration "${MATSIM_LAST_ITERATION:-100}" \
         "${FLAGS[@]}"
     echo "[$(date -Is)] DONE scenario=$SCENARIO"
     exit 0
