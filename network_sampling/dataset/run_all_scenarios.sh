@@ -129,15 +129,37 @@ echo "Manifest: $MANIFEST"
 echo "Compaction: $([[ " ${FLAGS[*]} " == *" --no-compact "* ]] && echo disabled || echo enabled)"
 echo "Delete raw outputs: $([[ " ${FLAGS[*]} " == *" --delete-raw "* ]] && echo YES || echo NO)"
 SCRIPT="/vast.mnt/home/20201733/Master_Thesis/network_sampling/dataset/run_all_scenarios.sh"
-sbatch \
-    --partition=mech-cst-mov.cpu.q \
-    --nodes=1 \
-    --ntasks=1 \
-    --cpus-per-task=2 \
-    --mem=6G \
-    --time=00:30:00 \
-    --job-name=matsim-dataset \
-    --output="$DATASET/slurm_logs/%A_%a.out" \
-    --error="$DATASET/slurm_logs/%A_%a.err" \
-    --array="0-$((N - 1))%$MAX_PARALLEL" \
-    "$SCRIPT" --worker "$MANIFEST" "$CONFIG" "$POPULATION" "$JAR" "$PYTHON" "${FLAGS[@]}"
+# Split into arrays smaller than the cluster's MaxArraySize=1001.
+# Each array uses its own manifest with local task indices starting at 0.
+split -l 1000 -d -a 3 \
+    "$MANIFEST" \
+    "${MANIFEST%.txt}.part."
+
+PREVIOUS_JOB_ID=""
+
+for PART in "${MANIFEST%.txt}.part."*; do
+    PART_N="$(wc -l < "$PART")"
+
+    DEP_ARGS=()
+    if [[ -n "$PREVIOUS_JOB_ID" ]]; then
+        DEP_ARGS=(--dependency="afterany:$PREVIOUS_JOB_ID")
+    fi
+
+    JOB_ID="$(sbatch --parsable \
+        --partition=mech-cst-mov.cpu.q \
+        --nodes=1 \
+        --ntasks=1 \
+        --cpus-per-task=2 \
+        --mem=6G \
+        --time=00:30:00 \
+        --job-name=matsim-dataset \
+        --output="$DATASET/slurm_logs/%A_%a.out" \
+        --error="$DATASET/slurm_logs/%A_%a.err" \
+        --array="0-$((PART_N - 1))%$MAX_PARALLEL" \
+        "${DEP_ARGS[@]}" \
+        "$SCRIPT" --worker "$PART" "$CONFIG" "$POPULATION" "$JAR" "$PYTHON" "${FLAGS[@]}")"
+
+    PREVIOUS_JOB_ID="${JOB_ID%%;*}"
+
+    echo "Submitted $PART_N scenarios as array $PREVIOUS_JOB_ID"
+done
