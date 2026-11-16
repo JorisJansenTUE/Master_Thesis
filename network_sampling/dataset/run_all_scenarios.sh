@@ -127,7 +127,7 @@ echo "Submitting $N scenarios, at most $MAX_PARALLEL simultaneous jobs."
 echo "Manifest: $MANIFEST"
 echo "Compaction: $([[ " ${FLAGS[*]} " == *" --no-compact "* ]] && echo disabled || echo enabled)"
 echo "Delete raw outputs: $([[ " ${FLAGS[*]} " == *" --delete-raw "* ]] && echo YES || echo NO)"
-
+SCRIPT="/vast.mnt/home/20201733/Master_Thesis/network_sampling/dataset/run_all_scenarios.sh"
 sbatch \
     --partition=mech-cst-mov.cpu.q \
     --nodes=1 \
