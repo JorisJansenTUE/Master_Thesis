@@ -1,111 +1,133 @@
 #!/bin/bash -l
-# Submit all MATSim scenarios as a throttled SLURM job array.
+# SLURM array launcher: one task per prepared scenario, throttled concurrency.
+# Run AFTER generate.py has finished.
 #
-# Usage (after generation):
-#   bash run_all_scenarios.sh "$DATASET" "$CONFIG" "$POPULATION" "$JAR" "$PYTHON" [max_parallel]
-# Example:
-#   bash run_all_scenarios.sh "$DATASET" "$CONFIG" "$POPULATION" "$JAR" "$PYTHON" 3
+# bash network_sampling/dataset/run_all_scenarios.sh \
+#   "$DATASET" "$CONFIG" "$POPULATION" "$JAR" "$PYTHON" [max_parallel] [--delete-raw] [--no-compact]
 #
-# Internally, SLURM invokes the same script using the --worker entrypoint.
-
+# Default: compact both original MATSim statistics after each successful run,
+# but KEEP raw_output. --delete-raw enables destructive cleanup only after
+# both target files are independently verified.
 set -euo pipefail
+
+SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
+PROJECT_ROOT="$(cd "$(dirname "$SCRIPT")/../.." && pwd -P)"
 
 if [[ "${1:-}" == "--worker" ]]; then
     shift
-    if [[ "$#" -ne 5 ]]; then
-        echo "Internal usage: --worker MANIFEST CONFIG POPULATION JAR PYTHON" >&2
+    if [[ "$#" -lt 5 ]]; then
+        echo "Internal: --worker MANIFEST CONFIG POPULATION JAR PYTHON [flags]" >&2
         exit 2
     fi
-
-    MANIFEST="$1"
-    CONFIG="$2"
-    POPULATION="$3"
-    JAR="$4"
-    PYTHON="$5"
-
-    : "${SLURM_ARRAY_TASK_ID:?This entrypoint must run in a SLURM array task}"
+    MANIFEST="$1"; CONFIG="$2"; POPULATION="$3"; JAR="$4"; PYTHON="$5"
+    shift 5
+    FLAGS=("$@")
+    : "${SLURM_ARRAY_TASK_ID:?Must run as SLURM array worker}"
     SCENARIO="$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$MANIFEST")"
-    if [[ -z "$SCENARIO" || ! -f "$SCENARIO/network.xml.gz" || ! -f "$SCENARIO/transit_schedule.xml.gz" ]]; then
-        echo "Missing/invalid scenario for task $SLURM_ARRAY_TASK_ID: $SCENARIO" >&2
+    if [[ -z "$SCENARIO" || ! -f "$SCENARIO/scenario.json" || \
+          ! -f "$SCENARIO/network.xml.gz" || \
+          ! -f "$SCENARIO/transit_schedule.xml.gz" || \
+          ! -f "$SCENARIO/link_mapping.csv.gz" ]]; then
+        echo "Invalid scenario at task $SLURM_ARRAY_TASK_ID: $SCENARIO" >&2
         exit 1
     fi
 
-    # Match the environment used by the successful single-scenario run.
     module purge
     module load EESSI/2026.06
     module load Java/25.36
 
-    echo "[$(date -Is)] START scenario=$SCENARIO task=${SLURM_ARRAY_TASK_ID} host=$(hostname)"
+    cd "$PROJECT_ROOT"
+    export PYTHONPATH="$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+    echo "[$(date -Is)] START task=$SLURM_ARRAY_TASK_ID scenario=$SCENARIO host=$(hostname)"
     "$PYTHON" -m network_sampling.dataset.run_one \
         --scenario "$SCENARIO" \
         --base-config "$CONFIG" \
         --population "$POPULATION" \
         --jar "$JAR" \
-        --threads 24 \
-        --heap 96G \
-        --reset-heap 24G \
-        --last-iteration 5
+        --threads "${SLURM_CPUS_PER_TASK:-24}" \
+        --heap "${MATSIM_HEAP:-96G}" \
+        --reset-heap "${MATSIM_RESET_HEAP:-24G}" \
+        --last-iteration "${MATSIM_LAST_ITERATION:-5}" \
+        "${FLAGS[@]}"
     echo "[$(date -Is)] DONE scenario=$SCENARIO"
     exit 0
 fi
 
-if [[ "$#" -lt 5 || "$#" -gt 6 ]]; then
-    echo "Usage: bash $0 DATASET CONFIG POPULATION JAR PYTHON [max_parallel]" >&2
+if (( $# < 5 )); then
+    echo "Usage: bash $0 DATASET CONFIG POPULATION JAR PYTHON [max_parallel] [--delete-raw] [--no-compact]" >&2
     exit 2
 fi
-
 DATASET="$(readlink -f "$1")"
 CONFIG="$(readlink -f "$2")"
 POPULATION="$(readlink -f "$3")"
 JAR="$(readlink -f "$4")"
 PYTHON="$5"
+shift 5
 
+# Bare command names are resolved with PATH. A venv path is NOT passed through
+# readlink -f, which can dereference python symlinks to the system interpreter.
 if [[ "$PYTHON" != */* ]]; then
-    # Python command such as "python" or "python3"
-    PYTHON="$(command -v "$PYTHON")"
+    PYTHON="$(command -v "$PYTHON")" || {
+        echo "Python command not found in PATH" >&2; exit 2;
+    }
 elif [[ "$PYTHON" != /* ]]; then
-    # Relative path such as ".venv/bin/python"
     PYTHON="$PWD/$PYTHON"
 fi
-MAX_PARALLEL="${6:-3}"
 
+MAX_PARALLEL=3
+if (( $# > 0 )) && [[ "$1" =~ ^[0-9]+$ ]]; then
+    MAX_PARALLEL="$1"
+    shift
+fi
 if ! [[ "$MAX_PARALLEL" =~ ^[1-9][0-9]*$ ]]; then
-    echo "max_parallel must be a positive integer (got '$MAX_PARALLEL')" >&2
+    echo "max_parallel must be a positive integer" >&2
     exit 2
 fi
-for f in "$CONFIG" "$POPULATION" "$JAR" "$PYTHON"; do
-    if [[ ! -f "$f" ]]; then
-        echo "File not found: $f" >&2
+FLAGS=()
+for option in "$@"; do
+    case "$option" in
+        --delete-raw|--no-compact) FLAGS+=("$option") ;;
+        *) echo "Unknown option: $option" >&2; exit 2 ;;
+    esac
+done
+if [[ " ${FLAGS[*]} " == *" --delete-raw "* && " ${FLAGS[*]} " == *" --no-compact "* ]]; then
+    echo "--delete-raw and --no-compact are incompatible" >&2
+    exit 2
+fi
+for file in "$CONFIG" "$POPULATION" "$JAR" "$PYTHON"; do
+    if [[ ! -f "$file" ]]; then
+        echo "File not found: $file" >&2
         exit 2
     fi
 done
-if [[ ! -d "$DATASET" ]]; then
-    echo "Dataset directory not found: $DATASET" >&2
+if [[ ! -f "$DATASET/dataset_manifest.json" || \
+      ! -f "$DATASET/street_segments.csv.gz" ]]; then
+    echo "Incomplete generated dataset: $DATASET" >&2
     exit 2
 fi
 
 mkdir -p "$DATASET/slurm_logs"
 MANIFEST="$(mktemp "$DATASET/scenario_manifest.XXXXXXXX.txt")"
-
-# Find all direct children with prepared network + transit schedule, independent
-# of strategy name (cluster, random, corridor, or future strategies).
-while IFS= read -r network_path; do
-    scenario_dir="${network_path%/network.xml.gz}"
-    if [[ -f "$scenario_dir/transit_schedule.xml.gz" ]]; then
-        printf '%s\n' "$scenario_dir" >> "$MANIFEST"
+while IFS= read -r file; do
+    directory="${file%/scenario.json}"
+    if [[ -f "$directory/network.xml.gz" && \
+          -f "$directory/transit_schedule.xml.gz" && \
+          -f "$directory/link_mapping.csv.gz" && \
+          -f "$directory/interventions.json" ]]; then
+        printf '%s\n' "$directory" >> "$MANIFEST"
     fi
-done < <(find "$DATASET" -mindepth 2 -maxdepth 2 -type f -name 'network.xml.gz' | LC_ALL=C sort)
-
+done < <(find "$DATASET" -mindepth 2 -maxdepth 2 -type f -name scenario.json | LC_ALL=C sort)
 N="$(wc -l < "$MANIFEST")"
 if (( N == 0 )); then
-    echo "No complete scenario folders (network.xml.gz + transit_schedule.xml.gz) in $DATASET" >&2
     rm -f "$MANIFEST"
+    echo "No prepared scenarios found in $DATASET" >&2
     exit 1
 fi
 
-SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
-echo "Found $N scenarios; submitting an array with at most $MAX_PARALLEL running simultaneously."
-echo "Scenario manifest: $MANIFEST"
+echo "Submitting $N scenarios, at most $MAX_PARALLEL simultaneous jobs."
+echo "Manifest: $MANIFEST"
+echo "Compaction: $([[ " ${FLAGS[*]} " == *" --no-compact "* ]] && echo disabled || echo enabled)"
+echo "Delete raw outputs: $([[ " ${FLAGS[*]} " == *" --delete-raw "* ]] && echo YES || echo NO)"
 
 sbatch \
     --partition=mech-cst-mov.cpu.q \
@@ -118,4 +140,5 @@ sbatch \
     --output="$DATASET/slurm_logs/%A_%a.out" \
     --error="$DATASET/slurm_logs/%A_%a.err" \
     --array="0-$((N - 1))%$MAX_PARALLEL" \
-    "$SCRIPT" --worker "$MANIFEST" "$CONFIG" "$POPULATION" "$JAR" "$PYTHON"
+    --chdir="$PROJECT_ROOT" \
+    "$SCRIPT" --worker "$MANIFEST" "$CONFIG" "$POPULATION" "$JAR" "$PYTHON" "${FLAGS[@]}"
