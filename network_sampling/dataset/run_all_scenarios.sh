@@ -47,7 +47,7 @@ if [[ "${1:-}" == "--worker" ]]; then
         --heap 6G \
         --initial-heap 2G \
         --reset-heap 4G \
-        --last-iteration 50 \
+        --last-iteration 100 \
         "${FLAGS[@]}"
     echo "[$(date -Is)] DONE scenario=$SCENARIO"
     exit 0
