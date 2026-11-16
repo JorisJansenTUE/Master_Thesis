@@ -43,10 +43,10 @@ if [[ "${1:-}" == "--worker" ]]; then
         --base-config "$CONFIG" \
         --population "$POPULATION" \
         --jar "$JAR" \
-        --threads "${SLURM_CPUS_PER_TASK:-24}" \
-        --heap "${MATSIM_HEAP:-96G}" \
-        --reset-heap "${MATSIM_RESET_HEAP:-24G}" \
-        --last-iteration "${MATSIM_LAST_ITERATION:-100}" \
+        --threads 2 \
+        --heap 12G \
+        --reset-heap 8G \
+        --last-iteration 100 \
         "${FLAGS[@]}"
     echo "[$(date -Is)] DONE scenario=$SCENARIO"
     exit 0
@@ -132,9 +132,9 @@ sbatch \
     --partition=mech-cst-mov.cpu.q \
     --nodes=1 \
     --ntasks=1 \
-    --cpus-per-task=24 \
-    --mem=128G \
-    --time=08:00:00 \
+    --cpus-per-task=2 \
+    --mem=16G \
+    --time=04:00:00 \
     --job-name=matsim-dataset \
     --output="$DATASET/slurm_logs/%A_%a.out" \
     --error="$DATASET/slurm_logs/%A_%a.err" \
