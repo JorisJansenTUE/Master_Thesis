@@ -27,7 +27,7 @@ from network_sampling.network.matsim_network import load_matsim_network
 from network_sampling.network.street_segments import StreetSegmentIndex
 from network_sampling.network.transit_usage import TransitUsageIndex
 from network_sampling.sampling.cluster import sample_clusters
-from network_sampling.sampling.corridor import sample_corridor_package
+from network_sampling.sampling.corridor_mixed import sample_corridor_package
 from network_sampling.sampling.random import sample_random
 from network_sampling.validation.connectivity import check_connectivity
 from network_sampling.interventions.matsim_app.apply_scenario import apply_matsim_scenario
