@@ -10,8 +10,6 @@
 # both target files are independently verified.
 set -euo pipefail
 
-SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
-PROJECT_ROOT="$(cd "$(dirname "$SCRIPT")/../.." && pwd -P)"
 
 if [[ "${1:-}" == "--worker" ]]; then
     shift
@@ -36,8 +34,9 @@ if [[ "${1:-}" == "--worker" ]]; then
     module load EESSI/2026.06
     module load Java/25.36
 
-    cd "$PROJECT_ROOT"
-    export PYTHONPATH="$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+    cd /vast.mnt/home/20201733/Master_Thesis
+    export PYTHONPATH="$PWD:${PYTHONPATH:-}"
+
     echo "[$(date -Is)] START task=$SLURM_ARRAY_TASK_ID scenario=$SCENARIO host=$(hostname)"
     "$PYTHON" -m network_sampling.dataset.run_one \
         --scenario "$SCENARIO" \
