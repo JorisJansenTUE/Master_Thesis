@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import random
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,8 +31,8 @@ from network_sampling.sampling.cluster import sample_clusters
 from network_sampling.sampling.corridor_mixed import sample_corridor_package
 from network_sampling.sampling.random import sample_random
 from network_sampling.validation.connectivity import check_connectivity
-from network_sampling.interventions.matsim_app.apply_scenario import apply_matsim_scenario
 
+from network_sampling.interventions.matsim_app.apply_scenario import apply_matsim_scenario
 
 
 DEFAULT_SETTINGS = dict(
@@ -46,6 +47,30 @@ DEFAULT_SETTINGS = dict(
     corridor_destination_share=0.10,
     corridor_bus_length_m=1500.0,
 )
+# Budget strata are balanced within each strategy, even when generation is batched
+# with --start-seed. Each individual budget is drawn uniformly within its stratum.
+BUDGET_STRATA_M = (
+    (500.0, 1500.0),
+    (1500.0, 3000.0),
+    (3000.0, 5000.0),
+    (5000.0, 7000.0),
+)
+
+# These are sampler parameters that already exist in generate.py. Do not vary
+# MATSim demand, calibration or connectivity/validity rules.
+PARAMETER_RANGES = {
+    "cluster_length_m": (400.0, 1800.0),
+    "cluster_pbl_weight": (0.5, 4.5),
+    "cluster_destination_weight": (0.3, 2.0),
+    "corridor_pbl_weight": (0.5, 5.0),
+    "corridor_intrusion_strength": (0.0, 2.5),
+    "corridor_bus_share": (0.0, 0.25),
+    "corridor_destination_share": (0.0, 0.25),
+    "corridor_bus_length_m": (500.0, 2000.0),
+}
+PARAMETER_SAMPLING_VERSION = 1
+STRATEGY_STRATUM_OFFSET = {"random": 0, "corridor": 1, "cluster": 2}
+
 SCENARIO_FILES = (
     "network.xml.gz", "transit_schedule.xml.gz", "interventions.json",
     "link_mapping.csv.gz", "scenario.json",
@@ -112,6 +137,69 @@ def sample(strategy: str, seed: int, base: Baseline, settings: dict):
     raise ValueError(f"Unknown strategy: {strategy}")
 
 
+def _scenario_settings(strategy: str, seed: int, global_settings: dict) -> tuple[dict, dict | None]:
+    """Draw one stable configuration per scenario (not per connectivity retry).
+
+    Deterministic under job restarts, batching and different strategy orderings.
+    No Python process-global hash or random state is involved.
+    """
+    distribution = global_settings.get("parameter_sampling")
+    if distribution is None:
+        return global_settings, None  # Preserve original fixed-settings behavior.
+
+    if strategy == "baseline":
+        return {
+            "budget_m": 0.0,
+            "width_attribute": global_settings["width_attribute"],
+        }, {"budget_stratum_index": None, "budget_stratum_m": None}
+
+    strata = distribution["budget_strata_m"]
+    offset = STRATEGY_STRATUM_OFFSET[strategy]
+    stratum_index = (seed + offset) % len(strata)
+    low, high = strata[stratum_index]
+    key = f"v{distribution['version']}:{distribution['seed']}:{strategy}:{seed}"
+    rng = random.Random(int.from_bytes(hashlib.sha256(key.encode("utf-8")).digest(), "big"))
+
+    sampled = {
+        "budget_m": rng.uniform(low, high),
+        "width_attribute": global_settings["width_attribute"],
+    }
+    if strategy == "cluster":
+        names = (
+            "cluster_length_m", "cluster_pbl_weight", "cluster_destination_weight",
+        )
+    elif strategy == "corridor":
+        names = (
+            "corridor_pbl_weight", "corridor_intrusion_strength",
+            "corridor_bus_share", "corridor_destination_share",
+            "corridor_bus_length_m",
+        )
+    elif strategy == "random":
+        names = ()  # sample_random currently exposes budget + seed only.
+    else:
+        raise ValueError(f"Unknown sampling strategy {strategy!r}")
+
+    for name in names:
+        lower, upper = distribution["ranges"][name]
+        sampled[name] = rng.uniform(lower, upper)
+
+    # Both sampled corridor shares are <= 0.25, hence sum <= 0.50.
+    return sampled, {
+        "budget_stratum_index": stratum_index,
+        "budget_stratum_m": [low, high],
+    }
+
+
+def _intervention_summary(records: list[dict]) -> dict:
+    by_type: dict[str, dict] = {}
+    for entry in records:
+        category = entry["intervention_type"]
+        summary = by_type.setdefault(category, {"count": 0, "length_m": 0.0})
+        summary["count"] += 1
+        summary["length_m"] += entry["length_m"]
+    return by_type
+
+
 def _serialized_interventions(interventions, index):
     """Keep the exact applied intervention, not just its sampler seed."""
     return [{
@@ -151,12 +239,17 @@ def _dataset_manifest(out: Path, network_path: Path, schedule_path: Path, settin
 def generate_one(strategy: str, seed: int, out: Path, schedule: Path,
                  base: Baseline, identity: dict, max_attempts: int) -> None:
     scenario_id = f"{strategy}_{seed:05d}"
+    settings, stratum_info = _scenario_settings(strategy, seed, identity["settings"])
+    randomize = stratum_info is not None
     target = out / scenario_id
     if target.exists():
         if not all((target / f).is_file() for f in SCENARIO_FILES):
             raise RuntimeError(f"Incomplete existing scenario: {target}")
         old = json.loads((target / "scenario.json").read_text(encoding="utf-8"))
-        if old.get("baseline_hashes") != identity["baseline_hashes"] or old.get("settings") != identity["settings"]:
+        same_settings = (old.get("settings") == settings)
+        if randomize:
+            same_settings &= old.get("generation_settings") == identity["settings"]
+        if old.get("baseline_hashes") != identity["baseline_hashes"] or not same_settings:
             raise RuntimeError(f"Existing {scenario_id} uses different input files/settings")
         print(f"SKIP {scenario_id}", flush=True)
         return
@@ -168,13 +261,13 @@ def generate_one(strategy: str, seed: int, out: Path, schedule: Path,
         reason = "No valid intervention sample"
         for attempt in range(1 if strategy == "baseline" else max_attempts):
             actual_seed = seed + attempt * 1_000_003
-            interventions = sample(strategy, actual_seed, base, identity["settings"])
+            interventions = sample(strategy, actual_seed, base, settings)
             if strategy != "baseline" and not interventions:
                 reason = "Sampler returned no interventions"
                 continue
             records = _serialized_interventions(interventions, base.index)
             used_m = sum(row["length_m"] for row in records)
-            if used_m > identity["settings"]["budget_m"] + 1e-6:
+            if used_m > settings["budget_m"] + 1e-6:
                 raise RuntimeError(f"Sampler exceeded budget in {scenario_id}: {used_m:.3f}m")
 
             network_file.unlink(missing_ok=True)
@@ -203,7 +296,7 @@ def generate_one(strategy: str, seed: int, out: Path, schedule: Path,
             (stage / "interventions.json").write_text(
                 json.dumps(records, indent=2) + "\n", encoding="utf-8"
             )
-            (stage / "scenario.json").write_text(json.dumps({
+            metadata = {
                 "schema_version": SCHEMA_VERSION,
                 "id": scenario_id, "strategy": strategy, "seed": seed,
                 "effective_seed": actual_seed, "attempts": attempt + 1,
@@ -212,8 +305,21 @@ def generate_one(strategy: str, seed: int, out: Path, schedule: Path,
                 "mapped_road_links": n_mapped,
                 "connectivity": connectivity,
                 "baseline_hashes": identity["baseline_hashes"],
-                "settings": identity["settings"],
-            }, indent=2) + "\n", encoding="utf-8")
+                "settings": settings,
+            }
+            if randomize:
+                metadata.update({
+                    "generation_settings": identity["settings"],
+                    "requested_budget_m": settings["budget_m"],
+                    "realized_budget_m": used_m,
+                    "budget_utilization": (used_m / settings["budget_m"]
+                                           if settings["budget_m"] else None),
+                    "parameter_sampling": stratum_info,
+                    "interventions_by_type": _intervention_summary(records),
+                })
+            (stage / "scenario.json").write_text(
+                json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
+            )
             stage.rename(target)  # Publish only after all validations and files succeeded.
             print(f"READY {scenario_id}: {len(records)} interventions; {used_m:.1f} m; "
                   f"{n_mapped} mapped road links", flush=True)
@@ -230,6 +336,10 @@ def main() -> None:
     parser.add_argument("--start-seed", type=int, default=0)
     parser.add_argument("--max-attempts", type=int, default=30)
     parser.add_argument("--budget", type=float, default=DEFAULT_SETTINGS["budget_m"])
+    parser.add_argument("--randomize-parameters", action="store_true",
+                        help="Stratify budget (0.5–7 km) and randomize existing strategy-specific sampler parameters")
+    parser.add_argument("--parameter-seed", type=int, default=42,
+                        help="Deterministic seed for scenario parameter draws (independent of sampler seeds)")
     # Expose the existing sampler settings so experiments are reproducible from CLI.
     parser.add_argument("--width-attribute", default=DEFAULT_SETTINGS["width_attribute"])
     parser.add_argument("--cluster-length", type=float, default=DEFAULT_SETTINGS["cluster_length_m"])
@@ -245,6 +355,10 @@ def main() -> None:
     args = parser.parse_args()
     if args.samples < 1 or args.start_seed < 0 or args.max_attempts < 1 or args.budget < 0:
         parser.error("--samples and --max-attempts must be positive; --start-seed and --budget nonnegative")
+    if args.parameter_seed < 0:
+        parser.error("--parameter-seed must be nonnegative")
+    if args.randomize_parameters and args.budget != DEFAULT_SETTINGS["budget_m"]:
+        parser.error("--budget is overridden by --randomize-parameters; edit BUDGET_STRATA_M instead")
 
     network_path = args.network.resolve(strict=True)
     schedule_path = args.schedule.resolve(strict=True)
@@ -266,6 +380,13 @@ def main() -> None:
         parser.error("corridor shares must be in [0,1]")
     if args.corridor_bus_share + args.corridor_destination_share > 1:
         parser.error("corridor bus/destination shares cannot sum above 1")
+    if args.randomize_parameters:
+        settings["parameter_sampling"] = {
+            "version": PARAMETER_SAMPLING_VERSION,
+            "seed": args.parameter_seed,
+            "budget_strata_m": [list(bounds) for bounds in BUDGET_STRATA_M],
+            "ranges": {name: list(bounds) for name, bounds in PARAMETER_RANGES.items()},
+        }
     identity = _dataset_manifest(out, network_path, schedule_path, settings)
     base = load_baseline(network_path, schedule_path, settings)
 
