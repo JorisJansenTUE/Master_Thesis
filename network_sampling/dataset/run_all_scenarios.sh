@@ -44,9 +44,9 @@ if [[ "${1:-}" == "--worker" ]]; then
         --population "$POPULATION" \
         --jar "$JAR" \
         --threads 2 \
-        --heap 6G \
-        --initial-heap 2G \
-        --reset-heap 4G \
+        --heap 4G \
+        --initial-heap 1G \
+        --reset-heap 3G \
         --last-iteration 100 \
         "${FLAGS[@]}"
     echo "[$(date -Is)] DONE scenario=$SCENARIO"
@@ -134,8 +134,8 @@ sbatch \
     --nodes=1 \
     --ntasks=1 \
     --cpus-per-task=2 \
-    --mem=8G \
-    --time=04:00:00 \
+    --mem=6G \
+    --time=00:30:00 \
     --job-name=matsim-dataset \
     --output="$DATASET/slurm_logs/%A_%a.out" \
     --error="$DATASET/slurm_logs/%A_%a.err" \
