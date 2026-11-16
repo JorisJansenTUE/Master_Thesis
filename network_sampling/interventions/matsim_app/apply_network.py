@@ -21,8 +21,8 @@ DESTINATION_ATTRIBUTE = "destination_road"
 BICYCLE_STREET_ATTRIBUTE = "cyclestreet"
 WIDTH_ATTRIBUTE = "carriageway_width_m"
 
-BICYCLE_STREET_SPEED_M_S = 20.0 / 3.6
-DESTINATION_ONLY_SPEED_M_S = 30.0 / 3.6
+BICYCLE_STREET_SPEED_M_S = 25.0 / 3.6
+DESTINATION_ONLY_SPEED_M_S = 20.0 / 3.6
 
 
 def apply_interventions(
