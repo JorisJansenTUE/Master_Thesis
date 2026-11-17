@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .input_tensors import FLOW_MODES, _check_node_order
+from gnn_surrogate.preprocessing.static.input_tensors import FLOW_MODES, _check_node_order
 
 
 SLOT_COLUMNS = ("segment_id", "from_node", "to_node")

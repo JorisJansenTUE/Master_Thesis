@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .input_tensors import FLOW_MODES
+from gnn_surrogate.preprocessing.static.input_tensors import FLOW_MODES
 from .target_tensors import build_delta_targets
 
 
