@@ -139,27 +139,39 @@ def build_scenario_feature_table(
     for row in nodes.itertuples(index=False):
         segment_to_nodes.setdefault(row.segment_id, []).append(int(row.node_id))
 
-    used_segments = set()
+    # The sampler allows two dedicated bus lanes on the same physical segment
+    # when they use different directed links. All other combinations on a
+    # repeated segment are incompatible. Track directed dual-node IDs to reject
+    # two bus interventions targeting the same street direction.
+    non_bus_segments: set[str] = set()
+    bus_directions_by_segment: dict[str, set[int]] = {}
     for entry in interventions:
         sid, kind = str(entry["segment_id"]), entry["intervention_type"]
-        if sid in used_segments:
-            raise ValueError(f"Multiple interventions on segment {sid}")
-        used_segments.add(sid)
         if kind not in TYPES or sid not in segment_to_nodes:
             raise ValueError(f"Unrecognized intervention {kind} on {sid}")
-        if kind in ("bicycle_street", "protected_bike_lane"):
-            data[kind][segment_to_nodes[sid]] = 1.0
-        elif kind == "destination_only":
-            for i in segment_to_nodes[sid]:
-                if base_access["car"][i]:
-                    data[kind][i] = 1.0
-        else:  # Dedicated bus lane is directional.
+        if kind != "dedicated_bus_lane":
+            if sid in non_bus_segments or sid in bus_directions_by_segment:
+                raise ValueError(f"Incompatible interventions on segment {sid}")
+            non_bus_segments.add(sid)
+            if kind in ("bicycle_street", "protected_bike_lane"):
+                data[kind][segment_to_nodes[sid]] = 1.0
+            else:  # Destination-only marks baseline car-accessible directions.
+                for i in segment_to_nodes[sid]:
+                    if base_access["car"][i]:
+                        data[kind][i] = 1.0
+        else:  # Dedicated bus lanes can coexist in opposite directions.
+            if sid in non_bus_segments:
+                raise ValueError(f"Incompatible interventions on segment {sid}")
             target = entry.get("target_link_ids", [])
             if len(target) != 1 or target[0] not in original_id_to_node:
                 raise ValueError(f"Invalid bus-lane target on {sid}: {target}")
             i = original_id_to_node[target[0]]
             if nodes.iloc[i].segment_id != sid:
                 raise ValueError(f"Bus-lane target {target[0]} is outside {sid}")
+            existing = bus_directions_by_segment.setdefault(sid, set())
+            if i in existing:
+                raise ValueError(f"Duplicate bus lane direction on segment {sid}")
+            existing.add(i)
             data[kind][i] = 1.0
 
     np.divide(scen_cap - base_cap, base_cap,
