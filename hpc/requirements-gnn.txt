@@ -1,0 +1,9 @@
+# Compact, pinned dependencies for Locarno GNN data preparation and training.
+# torch==2.5.1+cu121 is installed separately from the PyTorch CUDA 12.1 index.
+numpy==1.26.4
+pandas==2.2.3
+scipy==1.14.1
+networkx==3.4.2
+lxml==5.4.0
+sympy==1.13.1
+torch-geometric==2.8.1
