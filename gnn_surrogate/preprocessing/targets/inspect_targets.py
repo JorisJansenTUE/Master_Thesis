@@ -7,16 +7,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .input_tensors import FLOW_MODES
+from gnn_surrogate.preprocessing.static.input_tensors import FLOW_MODES
 from .target_tensors import load_scenario_hourly
-
+from preprocessing.utils import PROJECT_ROOT
 # ------------------------------------------------------------------
 # Local inspection settings (no CLI arguments needed)
 # ------------------------------------------------------------------
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 GRAPH_DIR = PROJECT_ROOT / "data" / "GNN" / "gnn_static"
 INPUTS_DIR = PROJECT_ROOT / "data" / "GNN" / "gnn_inputs"
-SCENARIO_DIR = PROJECT_ROOT / "data" / "training_dataset" / "cluster_00000"
+SCENARIO_DIR = Path("C:/Users/20201733/Downloads/cluster_00000")
 TARGET_DIR = PROJECT_ROOT / "data" / "GNN" / "targets" / "cluster_00000"
 
 

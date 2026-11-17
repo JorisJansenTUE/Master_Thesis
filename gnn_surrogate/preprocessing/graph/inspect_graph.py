@@ -9,11 +9,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
+from preprocessing.utils import PROJECT_ROOT
 # ------------------------------------------------------------------
 # Local inspection settings (edit these paths; no CLI arguments needed)
 # ------------------------------------------------------------------
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 GRAPH_DIR = PROJECT_ROOT / "data" / "GNN" / "gnn_static"
 SCENARIO_DIR: Path | None = Path(r"C:\Users\20201733\Downloads\cluster_00000")
 # Set SCENARIO_DIR = None to check only the graph's static topology.

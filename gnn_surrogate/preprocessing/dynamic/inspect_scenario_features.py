@@ -8,10 +8,10 @@ import pandas as pd
 
 from .intervention_audit import audit_scenario_interventions
 from .scenario_features import build_scenario_feature_table, select_dynamic_features
-
+from preprocessing.utils import PROJECT_ROOT
 # Settings — no command-line arguments.
 # Settings: adjust these paths for your own repository.
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 GRAPH_DIR = PROJECT_ROOT / "data" / "GNN" / "gnn_static"
 BASELINE_NETWORK = PROJECT_ROOT / "data" / "NDA_Eth_Model" / "Final_Baseline" / "network_with_widths.xml.gz"
 SCENARIO_DIR = Path("C:/Users/20201733/Downloads/cluster_00000")
