@@ -1,4 +1,5 @@
 name: thesis
+
 channels:
   - pytorch
   - nvidia
@@ -6,31 +7,28 @@ channels:
   - defaults
 
 dependencies:
-  # Python
   - python=3.11
 
-  # Core scientific stack
+  # Scientific stack
   - numpy
   - pandas
   - scipy
   - matplotlib
-
-  # Machine learning
   - scikit-learn
+  - networkx
 
-  # PyTorch (GPU support)
-  - pytorch
-  - pytorch-cuda=12.1  # adjust if needed
-  - torchvision
-  - torchaudio
+  # PyTorch
+  - pytorch=2.5.1
+  - pytorch-cuda=12.1
+  - sympy=1.13.1
 
-  # Geospatial (stable via conda)
+  # Geospatial
   - geopandas
   - shapely
   - pyproj
   - contextily
 
-  # OSM extraction tool
+  # OSM
   - osmium-tool
   - pyosmium
 
@@ -38,19 +36,10 @@ dependencies:
   - jupyter
   - tqdm
   - lxml
-
-  # Pip fallback for packages not in conda
   - pip
 
+  # Pip packages
   - pip:
-      # OSM / network tools
       - osmnx
-
-      # Optimization / surrogate modelling
       - scikit-optimize
-
-
-
-      # (optional, install later if needed)
-      # PyTorch Geometric stack (often easier to install manually)
-      # - torch-geometric
+      - torch-geometric==2.8.1

@@ -37,3 +37,6 @@ data/
 Thumbs.db
 .vscode/
 .idea/
+
+# Specific environment file for local development (not to be shared)
+environment-windows.yml
