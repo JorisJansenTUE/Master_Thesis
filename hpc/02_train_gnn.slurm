@@ -1,9 +1,7 @@
 #!/bin/bash -l
 #SBATCH --job-name=locarno-gnn-train
-# Choose the GPU partition at submission; e.g.
-# sbatch --partition=tue.gpu2.q hpc/02_train_gnn.slurm
-# Check sinfo before submission; A30 MIG allocations may have only 6 GB VRAM.
-# Do not use the old mech-cst-mov.cpu.q queue for training.
+#SBATCH --partition=tue.gpu2.q,tue.gpu3.q
+#SBATCH --gpus=1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
