@@ -20,6 +20,8 @@ matsim/output/
 
 data/
 *.csv 
+#slurmlogs
+slurm_logs/
 
 # LaTeX
 
