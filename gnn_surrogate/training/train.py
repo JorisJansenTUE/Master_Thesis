@@ -161,7 +161,7 @@ class ErrorSummary:
         self.sums = {
             label: {"abs": torch.zeros(len(modes), dtype=torch.float64),
                     "sq": torch.zeros(len(modes), dtype=torch.float64), "count": 0}
-            for label in ("all", "modified", "nearby")
+            for label in ("all", "modified", "nearby","unchanged")
         }
 
     def add(self, prediction: torch.Tensor, target: torch.Tensor,
