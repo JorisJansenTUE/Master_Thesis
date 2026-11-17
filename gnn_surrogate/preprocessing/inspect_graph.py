@@ -4,12 +4,19 @@ Does not train a model, generate features, or interpret interventions.
 """
 from __future__ import annotations
 
-import argparse
 import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+# ------------------------------------------------------------------
+# Local inspection settings (edit these paths; no CLI arguments needed)
+# ------------------------------------------------------------------
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+GRAPH_DIR = PROJECT_ROOT / "data" / "GNN" / "gnn_static"
+SCENARIO_DIR: Path | None = Path(r"C:\Users\20201733\Downloads\cluster_00000")
+# Set SCENARIO_DIR = None to check only the graph's static topology.
 
 FLOW_MODES = ("cars", "trucks", "bikes", "buses")
 
@@ -68,7 +75,9 @@ def inspect(graph_dir: Path, scenario_dir: Path | None = None) -> None:
     print(f"Scenario mapped links:       {len(mapping):,}")
     print(f"Mapped directional slots:    {joined.node_id.nunique():,}")
     print(f"Generated scenario links:    {int((mapping.link_kind != 'baseline').sum()):,}")
-    print(f"Newly enabled directions:    {int(joined.loc[joined.node_id.isin(nodes.loc[nodes.baseline_active == 0, 'node_id']), 'node_id'].nunique()):,}")
+    inactive_ids = set(nodes.loc[nodes.baseline_active == 0, "node_id"])
+    newly_enabled = joined.loc[joined.node_id.isin(inactive_ids), "node_id"].nunique()
+    print(f"Newly enabled directions:    {newly_enabled:,}")
 
     flows_path = scenario_dir / "targets" / "output_detailed_link_statistics.csv.gz"
     if flows_path.exists():
@@ -106,11 +115,7 @@ def inspect(graph_dir: Path, scenario_dir: Path | None = None) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--graph", type=Path, required=True)
-    parser.add_argument("--scenario", type=Path)
-    args = parser.parse_args()
-    inspect(args.graph, args.scenario)
+    inspect(GRAPH_DIR, SCENARIO_DIR)
 
 
 if __name__ == "__main__":
