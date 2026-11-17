@@ -103,6 +103,10 @@ def build_dual_graph(
     nodes["baseline_active"] = 0
     nodes["baseline_link_count"] = 0
     nodes["baseline_capacity"] = 0.0
+    # Car-only measures are cached once, for comparing each scenario network.
+    # A direction without car access has capacity and speed = 0.
+    nodes["baseline_car_capacity"] = 0.0
+    nodes["baseline_car_freespeed_m_s"] = 0.0
     nodes["baseline_freespeed_m_s"] = np.nan
     nodes["baseline_permlanes"] = 0.0
     for mode in MODE_NAMES:
@@ -141,6 +145,16 @@ def build_dual_graph(
         nodes.at[node_id, "baseline_active"] = 1
         nodes.at[node_id, "baseline_link_count"] = len(lids)
         nodes.at[node_id, "baseline_capacity"] = sum(l.capacity for l in links)
+        car_links = [l for l in links if "car" in l.allowed_modes]
+        if car_links:
+            if any(not (np.isfinite(l.capacity) and l.capacity > 0
+                        and np.isfinite(l.freespeed)) for l in car_links):
+                raise ValueError(f"Invalid baseline car capacity or speed on node {node_id}")
+            car_capacity = sum(l.capacity for l in car_links)
+            nodes.at[node_id, "baseline_car_capacity"] = car_capacity
+            nodes.at[node_id, "baseline_car_freespeed_m_s"] = (
+                sum(l.capacity * l.freespeed for l in car_links) / car_capacity
+            )
         nodes.at[node_id, "baseline_permlanes"] = sum(l.permlanes for l in links)
         # MATSim links in this pipeline record road class as osm:way:highway.
         nodes.at[node_id, "baseline_highways"] = json.dumps(sorted({

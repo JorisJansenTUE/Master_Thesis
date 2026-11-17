@@ -17,8 +17,8 @@ FLOW_MODES = ("cars", "trucks", "bikes", "buses")
 # after evaluating the basic model; IDs/highway names are not numeric features.
 DEFAULT_STATIC_COLUMNS = (
     "length_m",
-    "baseline_capacity",
-    "baseline_freespeed_m_s",
+    "baseline_car_capacity",
+    "baseline_car_freespeed_m_s",
     "mid_x",
     "mid_y",
     "baseline_active",

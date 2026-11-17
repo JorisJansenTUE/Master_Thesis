@@ -16,7 +16,8 @@ def main() -> None:
     parser.add_argument("--baseline-network", type=Path, required=True,
                         help="Original network_with_widths.xml.gz or baseline_00000/network.xml.gz")
     parser.add_argument("--baseline-flows", type=Path,
-                        help="Optional baseline scenario's hourly link statistics")
+                        help="Optional: include baseline daily totals in node table; "
+                             "not needed for build_inputs.py")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
 
@@ -31,7 +32,8 @@ def main() -> None:
     print(f"Saved {len(nodes):,} directed nodes and {edge_index.shape[1]:,} "
           f"potential dual edges to {args.out}")
     if args.baseline_flows is None:
-        print("Optional baseline daily traffic fields are empty (no --baseline-flows).")
+        print("Optional baseline daily traffic fields are empty; "
+              "build_inputs.py loads hourly baseline flows separately.")
 
 
 if __name__ == "__main__":
