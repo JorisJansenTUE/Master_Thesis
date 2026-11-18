@@ -15,6 +15,7 @@ import argparse
 import csv
 import json
 import random
+import shutil
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -26,9 +27,12 @@ from torch.utils.data import DataLoader
 from gnn_surrogate.dataset.dataset import ScenarioDataset, load_splits
 from gnn_surrogate.models.gnn_transformer import GNNTransformer
 from gnn_surrogate.training.losses import estimate_mode_scales, mode_balanced_mse_loss
-from preprocessing.utils import PROJECT_ROOT
 
-# ------------------------------ SETTINGS ----------------------------
+
+# ------------------------------ SETTINGS ---------------------------------
+# Replace this project-root expression with your preprocessing.utils helper
+# if you prefer. The relative expression works from training/train.py.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 GNN_DIR = PROJECT_ROOT / "data" / "GNN"
 SPLITS_FILE = GNN_DIR / "splits_local.json"   # use splits.json on the cluster
 RUN_DIR = GNN_DIR / "runs" / "trial_001"
@@ -73,6 +77,7 @@ class TrainSettings:
     min_delta: float = MIN_DELTA
     seed: int = SEED
     num_workers: int = NUM_WORKERS
+    resume_from: Path | None = None  # Existing run/last.pt, continue at epoch+1
 
 
 def _seed_everything(seed: int) -> None:
@@ -161,18 +166,17 @@ class ErrorSummary:
         self.sums = {
             label: {"abs": torch.zeros(len(modes), dtype=torch.float64),
                     "sq": torch.zeros(len(modes), dtype=torch.float64), "count": 0}
-            for label in ("all", "modified", "nearby","unchanged")
+            for label in ("all", "modified", "nearby", "unchanged")
         }
 
     def add(self, prediction: torch.Tensor, target: torch.Tensor,
             x_dynamic: torch.Tensor, edges: torch.Tensor) -> None:
         errors = (prediction.detach() - target).to(torch.float64)
         modified = (x_dynamic != 0).any(dim=-1)
-        unchanged = ~modified
         masks = {"all": torch.ones_like(modified, dtype=torch.bool),
                  "modified": modified,
                  "nearby": _neighborhood(modified, edges),
-                 "unchanged": unchanged}
+                 "unchanged": ~modified}
         for label, mask in masks.items():
             if not mask.any():
                 continue
@@ -281,12 +285,128 @@ def _save_checkpoint(path: Path, model: GNNTransformer,
         "static_feature_names": train_dataset.input_metadata["static_feature_names"],
         "dynamic_feature_names": train_dataset.dynamic_feature_names,
         "torch_version": torch.__version__,
+        # Preserve data-order and dropout RNG state for exact subsequent resumes.
+        # Older checkpoints without these keys can still be resumed, but the
+        # continued trajectory will not exactly match uninterrupted training.
+        "rng_state": {
+            "python": random.getstate(),
+            "numpy": np.random.get_state(),
+            "torch": torch.get_rng_state(),
+            "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        },
     }
     torch.save(checkpoint, path)
 
 
 def _json_save(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+
+
+def _restore_rng(checkpoint: dict) -> None:
+    """Restore RNG after model creation so dropout and data order can continue."""
+    state = checkpoint.get("rng_state")
+    if state is None:
+        print("WARNING: Old checkpoint lacks RNG state; resumed run is not "
+              "bitwise identical to uninterrupted training.", flush=True)
+        return
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch"].cpu())
+    if torch.cuda.is_available() and state.get("cuda") is not None:
+        torch.cuda.set_rng_state_all(state["cuda"])
+
+
+def _resume(
+    cfg: TrainSettings,
+    model: GNNTransformer,
+    optimizer: torch.optim.Optimizer,
+    scales: torch.Tensor,
+    model_kwargs: dict,
+    train_dataset: ScenarioDataset,
+    splits: dict,
+    device: torch.device,
+) -> tuple[int, float, int, int]:
+    """Load model+optimizer; transfer best checkpoint/history into a NEW run."""
+    path = cfg.resume_from
+    assert path is not None
+    path = path.resolve()
+    if path.name != "last.pt" or not path.is_file():
+        raise FileNotFoundError(f"Pass the previous run's last.pt: {path}")
+    prior = path.parent
+    best_path = prior / "best.pt"
+    history_path = prior / "history.csv"
+    if not best_path.is_file() or not history_path.is_file():
+        raise FileNotFoundError("Resume requires last.pt, best.pt and history.csv "
+                                f"in {prior}")
+    if cfg.run_dir.resolve() == prior:
+        raise ValueError("Use a NEW run directory; do not overwrite the original")
+
+    last = torch.load(path, map_location=device, weights_only=False)
+    best = torch.load(best_path, map_location="cpu", weights_only=False)
+    previous_config = last.get("config", {})
+    for name in ("lr", "weight_decay", "batch_size", "grad_clip", "min_delta", "seed", "max_nodes"):
+        current = getattr(cfg, name)
+        if previous_config.get(name) != current:
+            raise ValueError(f"Cannot resume with changed {name}: "
+                             f"checkpoint={previous_config.get(name)!r}, current={current!r}")
+    if last["model_kwargs"] != model_kwargs or best["model_kwargs"] != model_kwargs:
+        raise ValueError("Model architecture differs from checkpoint")
+    if last["splits"] != splits or best["splits"] != splits:
+        raise ValueError("Dataset splits differ from the previous experiment")
+    if list(last["target_modes"]) != list(train_dataset.target_modes):
+        raise ValueError("Target modes differ from checkpoint")
+    if list(last["input_modes"]) != list(train_dataset.input_modes):
+        raise ValueError("Input modes differ from checkpoint")
+    if list(last["static_feature_names"]) != list(train_dataset.input_metadata["static_feature_names"]):
+        raise ValueError("Static feature names differ from checkpoint")
+    if list(last["dynamic_feature_names"]) != list(train_dataset.dynamic_feature_names):
+        raise ValueError("Dynamic feature names differ from checkpoint")
+    if not torch.allclose(last["mode_scales"].to(device), scales, rtol=1e-6, atol=1e-7):
+        raise ValueError("Training-mode scales differ from checkpoint")
+
+    last_epoch, best_epoch = int(last["epoch"]), int(best["epoch"])
+    if last_epoch < best_epoch:
+        raise ValueError("Last checkpoint cannot predate best checkpoint")
+    if cfg.epochs <= last_epoch:
+        raise ValueError(f"--epochs is the TOTAL epoch count: must be > {last_epoch}")
+    best_loss = float(best["validation"]["loss"])
+    if not np.isfinite(best_loss):
+        raise ValueError("Nonfinite previous best validation loss")
+    stale = last_epoch - best_epoch
+    if stale >= cfg.patience:
+        raise ValueError(f"Previous run already early-stopped with stale={stale}; "
+                         "increase --patience explicitly in a new experiment")
+    # Validate history against checkpoint before touching the new run.
+    with history_path.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+    if not rows or int(rows[-1]["epoch"]) != last_epoch:
+        raise ValueError("History last epoch does not match last.pt")
+    expected_history_columns = [
+        "epoch", "train_mse", "val_mse", "val_modified_car_rmse",
+        "val_modified_truck_rmse", "val_modified_bike_rmse",
+        "val_nearby_car_rmse", "val_unchanged_car_rmse",
+        "val_unchanged_truck_rmse", "val_unchanged_bike_rmse", "epoch_seconds"
+    ]
+    with history_path.open("r", encoding="utf-8", newline="") as f:
+        previous_columns = next(csv.reader(f))
+    if previous_columns != expected_history_columns:
+        raise ValueError("Previous history.csv columns differ from the "
+                         "current training script; adapt them before resuming")
+
+    model.load_state_dict(last["model_state"])
+    optimizer.load_state_dict(last["optimizer_state"])
+    _restore_rng(last)
+    cfg.run_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(best_path, cfg.run_dir / "best.pt")
+    shutil.copy2(history_path, cfg.run_dir / "history.csv")
+    prior_best_validation = prior / "best_validation.json"
+    if prior_best_validation.is_file():
+        shutil.copy2(prior_best_validation, cfg.run_dir / "best_validation.json")
+    else:
+        _json_save(cfg.run_dir / "best_validation.json", best["validation"])
+    print(f"Resuming {path}: last epoch={last_epoch}, best epoch={best_epoch}, "
+          f"best val={best_loss:.6g}; continuing through epoch {cfg.epochs}", flush=True)
+    return last_epoch + 1, best_loss, best_epoch, stale
 
 
 def train(cfg: TrainSettings, *, model_overrides: dict | None = None) -> dict:
@@ -351,22 +471,28 @@ def train(cfg: TrainSettings, *, model_overrides: dict | None = None) -> dict:
         print("WARNING: SUBGRAPH DEBUG MODE — losses are NOT representative of full graph.",
               flush=True)
 
-    # Baseline benchmark calculated once, on validation only.
+    # Validation benchmark is independent of the checkpoint state.
     zero_val = _evaluate(model, val_loader, fixed, scales,
                          train_dataset.target_modes, device, zero_prediction=True)
     _json_save(cfg.run_dir / "no_change_validation.json", zero_val)
     print(f"No-change validation loss: {zero_val['loss']:.6g}", flush=True)
 
-    best_loss = float("inf")
-    best_epoch = 0
-    stale = 0
+    best_loss, best_epoch, stale = float("inf"), 0, 0
+    start_epoch = 1
+    if cfg.resume_from is not None:
+        start_epoch, best_loss, best_epoch, stale = _resume(
+            cfg, model, optimizer, scales, model_kwargs, train_dataset, splits, device
+        )
     history_path = cfg.run_dir / "history.csv"
-    with history_path.open("w", encoding="utf-8", newline="") as file:
+    with history_path.open("a" if cfg.resume_from else "w",
+                           encoding="utf-8", newline="") as file:
         writer = csv.writer(file)
-        writer.writerow(["epoch", "train_mse", "val_mse", "val_modified_car_rmse",
-                         "val_modified_truck_rmse", "val_modified_bike_rmse",
-                         "val_nearby_car_rmse", "val_unchanged_car_rmse", "val_unchanged_truck_rmse", "val_unchanged_bike_rmse", "epoch_seconds"])
-        for epoch in range(1, cfg.epochs + 1):
+        if cfg.resume_from is None:
+            writer.writerow(["epoch", "train_mse", "val_mse", "val_modified_car_rmse",
+                             "val_modified_truck_rmse", "val_modified_bike_rmse",
+                             "val_nearby_car_rmse", "val_unchanged_car_rmse",
+                             "val_unchanged_truck_rmse", "val_unchanged_bike_rmse", "epoch_seconds"])
+        for epoch in range(start_epoch, cfg.epochs + 1):
             start = time.monotonic()
             train_loss = _train_one_epoch(model, train_loader, fixed,
                                           scales, optimizer, cfg, device)
@@ -381,8 +507,9 @@ def train(cfg: TrainSettings, *, model_overrides: dict | None = None) -> dict:
             rmse_unchanged = validation["metrics"]["unchanged"]["rmse"]
             writer.writerow([epoch, train_loss, val_loss,
                              rmse_modified.get("cars"), rmse_modified.get("trucks"),
-                             rmse_modified.get("bikes"), rmse_nearby.get("cars"), 
-                             rmse_unchanged.get("cars"), rmse_unchanged.get("trucks"), rmse_unchanged.get("bikes"), elapsed])
+                             rmse_modified.get("bikes"), rmse_nearby.get("cars"),
+                             rmse_unchanged.get("cars"), rmse_unchanged.get("trucks"),
+                             rmse_unchanged.get("bikes"), elapsed])
             file.flush()
             print(f"Epoch {epoch:03d} | train={train_loss:.5g} | val={val_loss:.5g} "
                   f"| modified car RMSE={rmse_modified.get('cars')} "
@@ -424,7 +551,7 @@ def train(cfg: TrainSettings, *, model_overrides: dict | None = None) -> dict:
     _json_save(cfg.run_dir / "summary.json", summary)
     print("Best epoch:", best_epoch, "| test loss:", f"{test_result['loss']:.6g}",
           "| no-change test:", f"{zero_test['loss']:.6g}", flush=True)
-    for region in ("all", "modified", "nearby"):
+    for region in ("all", "modified", "nearby", "unchanged"):
         ours = test_result["metrics"][region]
         reference = zero_test["metrics"][region]
         if ours["count"] == 0:
@@ -449,12 +576,14 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--lr", type=float, default=LEARNING_RATE)
     parser.add_argument("--patience", type=int, default=PATIENCE)
+    parser.add_argument("--resume-from", type=Path, default=None,
+                        help="Continue from a previous run's last.pt; --epochs is the total epoch count")
     args = parser.parse_args()
     cfg = TrainSettings(
         gnn_dir=args.gnn_dir, split_file=args.splits, run_dir=args.out,
         device=args.device, max_nodes=(None if args.max_nodes == 0 else args.max_nodes),
         epochs=args.epochs, batch_size=args.batch_size, lr=args.lr,
-        patience=args.patience,
+        patience=args.patience, resume_from=args.resume_from,
     )
     train(cfg)
 
