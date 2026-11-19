@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=16G
 #SBATCH --time=03:00:00
-#SBATCH --output=training_v4_%j.out
-#SBATCH --error=training_v4_%j.err
+#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/training_v4_%j.out
+#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/training_v4_%j.err
 
 set -Eeuo pipefail
 
@@ -27,7 +27,7 @@ POPULATION="$BASE/rebuilds/530517/reprepared_531334/baseline_100_768160/simulati
 CONFIG="$BASE/rebuilds/530517/reprepared_531334/baseline_100_768160/simulation_output/output_config.xml"
 
 # New directory: do not overwrite the already simulated dataset_v3.
-DATASET="$BASE/training_dataset_v4"
+DATASET="$BASE/training_dataset_v4_small"
 PYTHON="$PY_REPO/.venv_hpc/bin/python"
 
 for file in "$JAR" "$NETWORK" "$SCHEDULE" "$POPULATION" "$CONFIG" "$PYTHON"; do
@@ -42,7 +42,7 @@ echo "STEP 1: Generating baseline and 667 scenarios per strategy ($SLURM_CPUS_PE
     --network "$NETWORK" \
     --schedule "$SCHEDULE" \
     --out "$DATASET" \
-    --samples 2000 \
+    --samples 4 \
     --strategies baseline cluster random corridor \
     --randomize-parameters \
     --parameter-seed 42 \
