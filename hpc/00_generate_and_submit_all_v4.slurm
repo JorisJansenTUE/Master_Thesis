@@ -24,10 +24,10 @@ JAR="/home/20201733/eqasim-java-Fork/switzerland/target/switzerland.jar"
 NETWORK="$BASE/rebuilds/530517/reprepared_531334/06_final_scenario/network_with_widths.xml.gz"
 SCHEDULE="$BASE/rebuilds/530517/reprepared_531334/06_final_scenario/locarno_transit_schedule.xml.gz"
 POPULATION="$BASE/rebuilds/530517/reprepared_531334/baseline_100_768160/simulation_output/output_plans.xml.gz"
-CONFIG="$BASE/rebuilds/530517/reprepared_531334/baseline_100_768160/simulation_output/output_config.xml"
+CONFIG=CONFIG="$BASE/rebuilds/530517/reprepared_531334/06_final_scenario/locarno_config.xml"
 
 # New directory: do not overwrite the already simulated dataset_v3.
-DATASET="$BASE/training_dataset_v4_small"
+DATASET="$BASE/training_dataset_v4"
 PYTHON="$PY_REPO/.venv_hpc/bin/python"
 
 for file in "$JAR" "$NETWORK" "$SCHEDULE" "$POPULATION" "$CONFIG" "$PYTHON"; do
@@ -42,7 +42,7 @@ echo "STEP 1: Generating baseline and 667 scenarios per strategy ($SLURM_CPUS_PE
     --network "$NETWORK" \
     --schedule "$SCHEDULE" \
     --out "$DATASET" \
-    --samples 4 \
+    --samples 2000 \
     --strategies baseline cluster random corridor \
     --randomize-parameters \
     --parameter-seed 42 \

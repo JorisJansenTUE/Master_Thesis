@@ -117,6 +117,7 @@ def run(args: argparse.Namespace) -> None:
         "--config:transit.transitScheduleFile", str(schedule),
         "--config:controller.outputDirectory", str(raw),
         "--config:global.numberOfThreads", str(args.threads),
+        "--config:qsim.numberOfThreads", str(args.threads),
         "--config:linkStats.writeLinkStatsInterval", str(args.linkstats_interval),
         "--config:linkStats.averageLinkStatsOverIterations", str(args.linkstats_average_iterations),
     ]
