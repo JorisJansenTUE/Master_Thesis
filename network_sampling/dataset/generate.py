@@ -53,25 +53,26 @@ DEFAULT_SETTINGS = dict(
 # Budget strata are balanced within each strategy, even when generation is batched
 # with --start-seed. Each individual budget is drawn uniformly within its stratum.
 BUDGET_STRATA_M = (
-    (500.0, 1500.0),
-    (1500.0, 3000.0),
-    (3000.0, 5000.0),
-    (5000.0, 7000.0),
+    (500.0, 3000.0),
+    (3000.0, 7000.0),
+    (7000.0, 15000.0),
+    (15000.0, 30000.0),
+    (30000.0, 50000.0),
 )
 
 # These are sampler parameters that already exist in generate.py. Do not vary
 # MATSim demand, calibration or connectivity/validity rules.
 PARAMETER_RANGES = {
-    "cluster_length_m": (400.0, 1800.0),
+    "cluster_length_m": (500.0, 5000.0),
     "cluster_pbl_weight": (0.5, 4.5),
     "cluster_destination_weight": (0.3, 2.0),
     "corridor_pbl_weight": (0.5, 5.0),
     "corridor_intrusion_strength": (0.0, 2.5),
     "corridor_bus_share": (0.0, 0.25),
     "corridor_destination_share": (0.0, 0.25),
-    "corridor_bus_length_m": (500.0, 2000.0),
+    "corridor_bus_length_m": (500.0, 5000.0),
 }
-PARAMETER_SAMPLING_VERSION = 1
+PARAMETER_SAMPLING_VERSION = 2
 STRATEGY_STRATUM_OFFSET = {"random": 0, "corridor": 1, "cluster": 2}
 
 SCENARIO_FILES = (

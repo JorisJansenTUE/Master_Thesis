@@ -48,6 +48,8 @@ if [[ "${1:-}" == "--worker" ]]; then
         --initial-heap 1G \
         --reset-heap 3G \
         --last-iteration 100 \
+        --linkstats-interval 25 \
+        --linkstats-average-iterations 5
         "${FLAGS[@]}"
     echo "[$(date -Is)] DONE scenario=$SCENARIO"
     exit 0
