@@ -35,7 +35,9 @@ require_file() { [[ -s "$1" ]] || { echo "Missing file: $1" >&2; exit 1; }; }
 module purge
 module load EESSI/2026.06
 module load Java/25.36
-module load Maven/3.9.6
+
+export MAVEN_HOME="$HOME/software/apache-maven-3.9.6"
+export PATH="$MAVEN_HOME/bin:$PATH"
 
 export JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
 export PATH="$JAVA_HOME/bin:$PATH"
