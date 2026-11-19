@@ -13,6 +13,8 @@ Run from Master_Thesis as:
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing as mp
 import hashlib
 import json
 import random
@@ -33,6 +35,7 @@ from network_sampling.sampling.random import sample_random
 from network_sampling.validation.connectivity import check_connectivity
 
 from network_sampling.interventions.matsim_app.apply_scenario import apply_matsim_scenario
+
 
 
 DEFAULT_SETTINGS = dict(
@@ -327,6 +330,21 @@ def generate_one(strategy: str, seed: int, out: Path, schedule: Path,
     raise RuntimeError(f"No valid sample for {scenario_id} after {max_attempts} attempts: {reason}")
 
 
+
+# Each generation task publishes its own scenario directory atomically.
+# The baseline is prepared once in the parent and inherited by workers via
+# fork on Linux; it is intentionally not pickled or rebuilt per scenario.
+_PARALLEL_CONTEXT = None
+
+
+def _generate_worker(task: tuple[str, int]) -> None:
+    if _PARALLEL_CONTEXT is None:
+        raise RuntimeError("Generation worker missing inherited baseline context")
+    base, schedule_path, out, identity, max_attempts = _PARALLEL_CONTEXT
+    strategy, seed = task
+    generate_one(strategy, seed, out, schedule_path, base, identity, max_attempts)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--network", required=True, type=Path)
@@ -335,6 +353,7 @@ def main() -> None:
     parser.add_argument("--samples", type=int, default=10, help="Samples PER strategy; baseline only once")
     parser.add_argument("--start-seed", type=int, default=0)
     parser.add_argument("--max-attempts", type=int, default=30)
+    parser.add_argument("--workers", type=int, default=1, help="Parallel scenario-generation processes (Linux fork; default 1)")
     parser.add_argument("--budget", type=float, default=DEFAULT_SETTINGS["budget_m"])
     parser.add_argument("--randomize-parameters", action="store_true",
                         help="Stratify budget (0.5–7 km) and randomize existing strategy-specific sampler parameters")
@@ -357,6 +376,8 @@ def main() -> None:
         parser.error("--samples and --max-attempts must be positive; --start-seed and --budget nonnegative")
     if args.parameter_seed < 0:
         parser.error("--parameter-seed must be nonnegative")
+    if args.workers < 1:
+        parser.error("--workers must be positive")
     if args.randomize_parameters and args.budget != DEFAULT_SETTINGS["budget_m"]:
         parser.error("--budget is overridden by --randomize-parameters; edit BUDGET_STRATA_M instead")
 
@@ -396,10 +417,28 @@ def main() -> None:
         n = write_street_segments(segment_file, base.index)
         print(f"Saved {n} baseline physical street segments", flush=True)
 
-    for strategy in dict.fromkeys(args.strategies):
-        seeds = [0] if strategy == "baseline" else range(args.start_seed, args.start_seed + args.samples)
-        for seed in seeds:
+    tasks = [
+        (strategy, seed)
+        for strategy in dict.fromkeys(args.strategies)
+        for seed in ([0] if strategy == "baseline" else
+                     range(args.start_seed, args.start_seed + args.samples))
+    ]
+    if args.workers == 1:
+        for strategy, seed in tasks:
             generate_one(strategy, seed, out, schedule_path, base, identity, args.max_attempts)
+    else:
+        # Linux/HPC only: fork lets workers inherit the read-only baseline
+        # without reloading it for each task. Every task has a unique directory.
+        global _PARALLEL_CONTEXT
+        _PARALLEL_CONTEXT = (base, schedule_path, out, identity, args.max_attempts)
+        print(f"Generating {len(tasks)} scenarios with {args.workers} processes", flush=True)
+        with ProcessPoolExecutor(
+            max_workers=args.workers,
+            mp_context=mp.get_context("fork"),
+        ) as pool:
+            for _ in pool.map(_generate_worker, tasks, chunksize=1):
+                pass
+        _PARALLEL_CONTEXT = None
 
     names = sorted(p.name for p in out.iterdir()
                    if p.is_dir() and (p / "scenario.json").is_file())
