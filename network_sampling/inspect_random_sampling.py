@@ -26,7 +26,7 @@ TRANSIT_SCHEDULE_FILE = Path(DATA_DIR / "NDA_ETH_Model" / "Final_Baseline" / "lo
 
 WIDTH_ATTRIBUTE = "carriageway_width_m"
 
-BUDGET_M = 5000.0
+BUDGET_M = 3000.0
 SEEDS = range(0, 50)
 
 

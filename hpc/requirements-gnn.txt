@@ -7,3 +7,4 @@ networkx==3.4.2
 lxml==5.4.0
 sympy==1.13.1
 torch-geometric==2.8.1
+matplotlib==3.9.4

@@ -13,14 +13,14 @@ from preprocessing.utils import DATA_DIR, RAW_DIR
 # ------------------------------------------------------------------
 
 SCENARIO = Path(
-    DATA_DIR / "NDA_Eth_Model" / "Updated_router_results"
+    DATA_DIR / "NDA_Eth_Model" / "updated_new"
 )
 
-TRIPS_FILE = SCENARIO / "output_trips_REV.csv.gz"
+TRIPS_FILE = Path(SCENARIO / "output_trips_v2.csv.gz")
 
-TIME_OUTPUT_FILE = SCENARIO / "travel_times_by_mode_REV-only.png"
-DISTANCE_OUTPUT_FILE = SCENARIO / "travel_distances_by_mode_REV-only.png"
-SUMMARY_OUTPUT_FILE = SCENARIO / "travel_time_distance_histograms_REV-only.csv"
+TIME_OUTPUT_FILE = SCENARIO / "NEW_travel_times_by_mode.png"
+DISTANCE_OUTPUT_FILE = SCENARIO / "NEW_travel_distances_by_mode.png"
+SUMMARY_OUTPUT_FILE = SCENARIO / "NEW_travel_time_distance_histograms.csv"
 
 MODES_TO_PLOT = {
     "car": "Car",
@@ -75,7 +75,7 @@ DISTANCE_X_LIMITS = None
 # Geographic filtering
 # ------------------------------------------------------------------
 
-FILTER_PROJECT_AREA = True
+FILTER_PROJECT_AREA = False  # Set to True to filter trips by project area
 
 PROJECT_SHAPE = Path(
     RAW_DIR / "shapes" / "REV_Cintura_project.shp"
