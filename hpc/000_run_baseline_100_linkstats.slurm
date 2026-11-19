@@ -22,10 +22,10 @@ PT_SCHEDULE="$SCENARIO_DIR/locarno_transit_schedule.xml.gz"
 PT_VEHICLES="$SCENARIO_DIR/locarno_transit_vehicles.xml.gz"
 
 BUILD_JAR="${BUILD_JAR:-1}"  # 1 = clean compile, 0 = reuse existing JAR
-LINKSTATS_INTERVAL="${LINKSTATS_INTERVAL:-1}"
-LINKSTATS_AVERAGING="${LINKSTATS_AVERAGING:-1}"
+LINKSTATS_INTERVAL="${LINKSTATS_INTERVAL:-25}"
+LINKSTATS_AVERAGING="${LINKSTATS_AVERAGING:-5}"
 THREADS="${SLURM_CPUS_PER_TASK:-24}"
-HEAP="200G"
+HEAP="16G"
 OUTPUT_DIR="$(dirname "$SCENARIO_DIR")/baseline_100_${SLURM_JOB_ID}/simulation_output"
 
 log() { echo "[$(date '+%F %T')] $*"; }
@@ -69,7 +69,7 @@ java -Xmx"$HEAP" -XX:ActiveProcessorCount="$THREADS" -cp "$JAR" \
     --config:transit.transitScheduleFile "$PT_SCHEDULE" \
     --config:transit.vehiclesFile "$PT_VEHICLES" \
     --config:controller.firstIteration 0 \
-    --config:controller.lastIteration 100 \
+    --config:controller.lastIteration 200 \
     --config:controller.outputDirectory "$OUTPUT_DIR" \
     --config:linkStats.writeLinkStatsInterval "$LINKSTATS_INTERVAL" \
     --config:linkStats.averageLinkStatsOverIterations "$LINKSTATS_AVERAGING"
