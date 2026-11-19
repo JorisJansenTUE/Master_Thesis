@@ -1,3 +1,14 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=locarno_baseline100
+#SBATCH --partition=mech-cst-mov.cpu.q
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=24
+#SBATCH --mem=20G
+#SBATCH --time=2:00:00
+#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/baseline_100_%j.out
+#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/baseline_100_%j.err
+
 set -Eeuo pipefail
 
 JAVA_REPO="/home/20201733/eqasim-java-Fork"
