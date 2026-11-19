@@ -15,7 +15,7 @@ from statistics import mean, median
 
 
 from preprocessing.utils import PROJECT_ROOT
-from accessibility.inputs.linkstats import LinkTravelTimes  
+from accessibility.inputs.links.linkstats import LinkTravelTimes  
 
 
 # -----------------------------------------------------------------------------
