@@ -63,6 +63,12 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("--threads must be positive")
     if args.last_iteration is not None and args.last_iteration < 0:
         raise ValueError("--last-iteration must be nonnegative")
+    if args.linkstats_interval < 1 or args.linkstats_average_iterations < 1:
+        raise ValueError("linkstats interval/average must be positive")
+    if args.linkstats_average_iterations > args.linkstats_interval:
+        raise ValueError("linkstats averaging window cannot exceed the write interval")
+    if args.last_iteration is not None and args.last_iteration % args.linkstats_interval != 0:
+        raise ValueError("last iteration must be a multiple of the linkstats interval so a final target exists")
     if args.delete_raw and args.no_compact:
         raise ValueError("--delete-raw cannot be combined with --no-compact")
     metadata = json.loads((scenario / "scenario.json").read_text(encoding="utf-8"))
@@ -80,6 +86,7 @@ def run(args: argparse.Namespace) -> None:
             status["postprocessing"] = {
                 "state": "completed", "delete_raw": args.delete_raw,
                 "finished": _time(), "flow_file": report["flow_file"],
+                "linkstats_file": report["linkstats_file"],
             }
             _status_write(status_path, status)
         return
@@ -110,6 +117,8 @@ def run(args: argparse.Namespace) -> None:
         "--config:transit.transitScheduleFile", str(schedule),
         "--config:controller.outputDirectory", str(raw),
         "--config:global.numberOfThreads", str(args.threads),
+        "--config:linkStats.writeLinkStatsInterval", str(args.linkstats_interval),
+        "--config:linkStats.averageLinkStatsOverIterations", str(args.linkstats_average_iterations),
     ]
     if args.last_iteration is not None:
         simulate += ["--config:controller.lastIteration", str(args.last_iteration)]
@@ -128,6 +137,8 @@ def run(args: argparse.Namespace) -> None:
         "population": str(population), "jar": str(jar),
         "working_directory": str(workdir), "threads": args.threads,
         "last_iteration": args.last_iteration,
+        "linkstats_interval": args.linkstats_interval,
+        "linkstats_average_iterations": args.linkstats_average_iterations,
     }
     _status_write(status_path, status)
     try:
@@ -148,6 +159,7 @@ def run(args: argparse.Namespace) -> None:
             status["postprocessing"] = {
                 "state": "completed", "finished": _time(),
                 "delete_raw": args.delete_raw, "flow_file": report["flow_file"],
+                "linkstats_file": report["linkstats_file"],
             }
     except Exception as exc:
         if status["state"] != "completed":
@@ -178,7 +190,9 @@ def main() -> None:
     parser.add_argument("--initial-heap", default="16G")
     parser.add_argument("--reset-heap", default="24G")
     parser.add_argument("--last-iteration", type=int, default=None)
-    parser.add_argument("--no-compact", action="store_true", help="Do not extract the two target CSVs")
+    parser.add_argument("--linkstats-interval", type=int, default=10)
+    parser.add_argument("--linkstats-average-iterations", type=int, default=5)
+    parser.add_argument("--no-compact", action="store_true", help="Disable target extraction")
     parser.add_argument("--delete-raw", action="store_true", help="After compaction succeeds, delete raw_output and regenerated population")
     parser.add_argument("--dry-run", action="store_true")
     run(parser.parse_args())

@@ -1,13 +1,14 @@
-"""Preserve only the two raw MATSim training targets, optionally delete raw_output.
+"""Preserve original MATSim flow, mode-share and final-iteration linkstats targets.
 
 Retains the ORIGINAL columns, link IDs and hourly bins of:
     targets/output_detailed_link_statistics.csv.gz
     targets/modestats.csv
+    targets/linkstats.txt.gz          # final iteration, original TSV columns
 
 All original columns are preserved. No GNN feature engineering or aggregation.
 By default raw_output is left intact. --delete-raw deletes it and the
 regenerable route-checked population ONLY after a completed run and verified
-copies of BOTH target files.
+copies of ALL THREE target files.
 
 Usage:
     python -m network_sampling.dataset.compact_outputs --scenario "$SCENARIO"
@@ -21,6 +22,7 @@ import gzip
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -29,6 +31,7 @@ from pathlib import Path
 
 FLOW_FILE = "output_detailed_link_statistics.csv.gz"
 MODE_FILE = "modestats.csv"
+LINKSTATS_FILE = "linkstats.txt.gz"
 FLOW_MODES = ("cars", "trucks", "bikes", "buses")
 MODES = FLOW_MODES  # Retain compare_flows.py compatibility
 SUCCEEDED = {"completed", "complete", "succeeded", "success"}
@@ -79,6 +82,84 @@ def _source_modes(scenario: Path) -> Path:
             return target
         raise FileNotFoundError(f"Missing modestats.csv under {scenario}/raw_output")
     return src
+
+
+def _source_linkstats(scenario: Path) -> tuple[Path, int | None]:
+    """Find the latest MATSim linkstats output, usually ITERS/it.N/N.linkstats.txt.gz.
+
+    When last_iteration is recorded in run_status.json, require exactly that
+    iteration. This prevents silently saving an earlier reporting window.
+    """
+    raw = scenario / "raw_output"
+    status = json.loads((scenario / "run_status.json").read_text(encoding="utf-8"))
+    last = status.get("last_iteration")
+    last = int(last) if last is not None else None
+    candidates = []
+    if raw.is_dir():
+        for file in raw.rglob("*linkstats.txt*"):
+            if not file.is_file():
+                continue
+            match = re.fullmatch(r"(?:(\d+)\.)?linkstats\.txt(?:\.gz)?", file.name)
+            if match is not None:
+                iteration = int(match.group(1)) if match.group(1) else None
+                candidates.append((iteration, file))
+    if candidates:
+        numbered = [(n, p) for n, p in candidates if n is not None]
+        if last is not None:
+            matching = [(n, p) for n, p in numbered if n == last]
+            if not matching:
+                raise FileNotFoundError(
+                    f"{scenario.name}: no linkstats for lastIteration={last}; "
+                    "set linkStats.writeLinkStatsInterval to a divisor of lastIteration "
+                    "and keep raw_output for diagnosis."
+                )
+            selected = matching
+        elif numbered:
+            top = max(n for n, _ in numbered)
+            selected = [(n, p) for n, p in numbered if n == top]
+        else:
+            selected = candidates
+        if len(selected) != 1:
+            raise ValueError(f"Ambiguous linkstats files for {scenario.name}: {selected}")
+        return selected[0][1], selected[0][0]
+
+    target = scenario / "targets" / LINKSTATS_FILE
+    if target.is_file():
+        # An already compacted scenario does not need raw_output again.
+        summary = scenario / "targets" / "target_summary.json"
+        iteration = None
+        if summary.is_file():
+            iteration = json.loads(summary.read_text(encoding="utf-8")).get("linkstats_iteration")
+        return target, iteration
+    raise FileNotFoundError(
+        f"{scenario.name}: missing ITERS/it.N/N.linkstats.txt.gz; "
+        "raw output will NOT be deleted. Previous compacted runs cannot "
+        "recover linkstats if raw_output was already removed."
+    )
+
+
+def _validate_linkstats(path: Path) -> dict:
+    """Validate gzip integrity and basic MATSim TSV structure without changing columns.
+
+    Read to EOF so gzip CRC errors are detected before cleanup.
+    """
+    rows = 0
+    with _open_text(path) as stream:
+        reader = csv.reader(stream, delimiter="\t")
+        header = next(reader, [])
+        if len(header) < 3 or not any("TRAVELTIME" in h.upper() for h in header):
+            raise ValueError(f"{path}: not a MATSim linkstats file with TRAVELTIME columns")
+        # In MATSim outputs the first column is the link ID.
+        for row in reader:
+            if not row or not row[0].strip():
+                raise ValueError(f"{path}: empty row/link identifier")
+            if len(row) != len(header):
+                raise ValueError(f"{path}: inconsistent column count at row {rows+2}")
+            rows += 1
+    if not rows:
+        raise ValueError(f"{path}: no link statistics rows")
+    return {"rows": rows, "columns": len(header),
+            "travel_time_columns": [name for name in header if "TRAVELTIME" in name.upper()]}
 
 
 def _validate_flows(path: Path) -> dict:
@@ -190,28 +271,38 @@ def compact(scenario: Path, delete_raw: bool = False) -> dict:
         raise RuntimeError(f"{scenario.name}: no successful run_status.json; not deleting outputs")
 
     src_flow, src_mode = _source_flow(scenario), _source_modes(scenario)
+    src_linkstats, linkstats_iteration = _source_linkstats(scenario)
     original_flows = _validate_flows(src_flow)
     original_modes = _validate_modes(src_mode)
+    original_linkstats = _validate_linkstats(src_linkstats)
 
     # Stage on same filesystem, validate copies before touching final targets.
     with tempfile.TemporaryDirectory(dir=scenario, prefix=".targets_tmp_") as tmp:
         stage = Path(tmp)
         flow_dest = stage / FLOW_FILE
         mode_dest = stage / MODE_FILE
+        linkstats_dest = stage / LINKSTATS_FILE
         _copy_as_gzip(src_flow, flow_dest)
         _copy_as_plain(src_mode, mode_dest)
+        _copy_as_gzip(src_linkstats, linkstats_dest)
         if _validate_flows(flow_dest) != original_flows:
             raise RuntimeError(f"{scenario.name}: hourly flow copy verification failed")
         if _validate_modes(mode_dest) != original_modes:
             raise RuntimeError(f"{scenario.name}: mode-share copy verification failed")
+        if _validate_linkstats(linkstats_dest) != original_linkstats:
+            raise RuntimeError(f"{scenario.name}: linkstats copy verification failed")
         report = {
             "format": "original_matsim_statistics",
             "flow_file": f"targets/{FLOW_FILE}",
             "modestats_file": f"targets/{MODE_FILE}",
+            "linkstats_file": f"targets/{LINKSTATS_FILE}",
+            "linkstats_iteration": linkstats_iteration,
+            "linkstats": original_linkstats,
             "flow": original_flows,
             "modestats": original_modes,
             "flow_sha256": _sha256(flow_dest),
             "modestats_sha256": _sha256(mode_dest),
+            "linkstats_sha256": _sha256(linkstats_dest),
         }
         (stage / "target_summary.json").write_text(
             json.dumps(report, indent=2) + "\n", encoding="utf-8"
@@ -225,7 +316,8 @@ def compact(scenario: Path, delete_raw: bool = False) -> dict:
         # Explicit completion + verified destination sources are required.
         final = scenario / "targets"
         if _sha256(final / FLOW_FILE) != report["flow_sha256"] or \
-           _sha256(final / MODE_FILE) != report["modestats_sha256"]:
+           _sha256(final / MODE_FILE) != report["modestats_sha256"] or \
+           _sha256(final / LINKSTATS_FILE) != report["linkstats_sha256"]:
             raise RuntimeError("Final target integrity verification failed; raw output retained")
         raw = scenario / "raw_output"
         if raw.is_dir():
@@ -234,7 +326,8 @@ def compact(scenario: Path, delete_raw: bool = False) -> dict:
         (scenario / "population_routechecked.xml.gz").unlink(missing_ok=True)
         print(f"CLEANED {scenario.name}: removed raw_output and routechecked population", flush=True)
     print(f"SAVED {scenario.name}: {original_flows['rows']:,} link-hour rows, "
-          f"hours={len(original_flows['hours'])}, mode iteration={original_modes['final_iteration']}", flush=True)
+          f"hours={len(original_flows['hours'])}, mode iteration={original_modes['final_iteration']}, "
+          f"linkstats iteration={linkstats_iteration}", flush=True)
     return report
 
 
@@ -272,7 +365,7 @@ def main():
     group.add_argument("--scenario", type=Path)
     group.add_argument("--dataset", type=Path)
     parser.add_argument("--delete-raw", action="store_true",
-                        help="Only after both targets are verified and simulation status is completed")
+                        help="Only after all three targets are verified and simulation status is completed")
     args = parser.parse_args()
     scenarios = [args.scenario] if args.scenario is not None else sorted(
         p for p in args.dataset.iterdir()
