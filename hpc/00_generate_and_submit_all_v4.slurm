@@ -24,7 +24,7 @@ JAR="/home/20201733/eqasim-java-Fork/switzerland/target/switzerland.jar"
 NETWORK="$BASE/rebuilds/530517/reprepared_531334/06_final_scenario/network_with_widths.xml.gz"
 SCHEDULE="$BASE/rebuilds/530517/reprepared_531334/06_final_scenario/locarno_transit_schedule.xml.gz"
 POPULATION="$BASE/rebuilds/530517/reprepared_531334/baseline_100_768160/simulation_output/output_plans.xml.gz"
-CONFIG=CONFIG="$BASE/rebuilds/530517/reprepared_531334/06_final_scenario/locarno_config.xml"
+CONFIG="$BASE/rebuilds/530517/reprepared_531334/06_final_scenario/locarno_config.xml"
 
 # New directory: do not overwrite the already simulated dataset_v3.
 DATASET="$BASE/training_dataset_v4"
