@@ -22,6 +22,7 @@ class PointAttachments:
     total_points: int
     attached_points: int
     unsnapped_ids: tuple[str, ...]
+    nearest_distances_m: dict[str, float]
 
     @property
     def unsnapped_count(self) -> int:
@@ -80,8 +81,8 @@ class RoadSnapIndex:
         """Return directed-link connectors, one row per link candidate.
 
         ``fraction`` is measured along each *directed* link (0 at its from-node,
-        1 at its to-node). The connector travel time is only off-network
-        distance/speed; remaining/partial link traversal belongs to Step 4.
+        1 at its to-node). Off-network distance is a snapping diagnostic
+        only; partial-link traversal is handled later in Step 4.
 
         The same point may have two connectors for opposing directions. Step 4
         must count a destination's jobs at most once, using its ``point_id``.
@@ -96,6 +97,7 @@ class RoadSnapIndex:
 
         rows: list[dict] = []
         unsnapped: list[str] = []
+        nearest_distances_m: dict[str, float] = {}
         for point_id, x, y in points[[id_column, x_column, y_column]].itertuples(index=False, name=None):
             point_id = str(point_id)
             x, y = float(x), float(y)
@@ -105,6 +107,8 @@ class RoadSnapIndex:
             segment_idx = int(self.tree.nearest(point))
             segment = self.segments[segment_idx]
             distance = float(segment.distance(point))
+            # Preserve distances also for rejected points, for GIS diagnostics.
+            nearest_distances_m[point_id] = distance
             if distance > max_distance_m:
                 unsnapped.append(point_id)
                 continue
@@ -128,4 +132,5 @@ class RoadSnapIndex:
             total_points=len(points),
             attached_points=len(points) - len(unsnapped),
             unsnapped_ids=tuple(unsnapped),
+            nearest_distances_m=nearest_distances_m,
         )

@@ -13,8 +13,11 @@ from time import perf_counter
 from .employment import EmploymentDestinations
 from .origins import HexagonOrigins
 from .snapping import RoadSnapIndex
+from .spatial_diagnostics import export_spatial_diagnostics
+
 from accessibility.inputs.links.linkstats import LinkTravelTimes
 from accessibility.inputs.links.network import load_road_networks
+
 from preprocessing.utils import PROJECT_ROOT
 
 RUN_DIR = PROJECT_ROOT / "data" / "Simulated_Runs" / "baseline_00000"
@@ -83,6 +86,8 @@ def main() -> None:
     print(f"Hexagons: {len(origins.cells):,}; employment cells: {len(jobs.jobs):,}")
     print(f"Employment total (STATENT): {jobs.jobs['jobs'].sum():,.0f}")
     print("Off-network distance is only a snapping threshold, NOT a time penalty.")
+    origin_attachments = {}
+    job_attachments = {}
     for mode, network in (("car", car), ("bike", bike)):
         snap_index = RoadSnapIndex(network.graph)
         origin_connections = snap_index.attach(
@@ -93,6 +98,8 @@ def main() -> None:
             jobs.jobs, id_column="job_id", x_column="x", y_column="y",
             max_distance_m=MAX_JOB_SNAP_M,
         )
+        origin_attachments[mode] = origin_connections
+        job_attachments[mode] = job_connections
         origin_connections.save(OUTPUT_DIR / f"{mode}_origin_connectors.csv")
         job_connections.save(OUTPUT_DIR / f"{mode}_job_connectors.csv")
         _describe(mode, "origins", origin_connections)
@@ -100,6 +107,16 @@ def main() -> None:
         attached_ids = set(job_connections.connectors["point_id"])
         attached_jobs = jobs.jobs.loc[jobs.jobs["job_id"].isin(attached_ids), "jobs"].sum()
         print(f"    Attached jobs total: {attached_jobs:,.0f}")
+
+    diagnostics_file = OUTPUT_DIR / "snapping_diagnostics.gpkg"
+    export_spatial_diagnostics(
+        diagnostics_file,
+        origins=origins.cells,
+        jobs=jobs.jobs,
+        origin_attachments=origin_attachments,
+        job_attachments=job_attachments,
+    )
+    print(f"Diagnostic GeoPackage: {diagnostics_file}")
     t3 = perf_counter()
     print(f"\nTimings: networks {t1-t0:.2f}s, spatial data {t2-t1:.2f}s, "
           f"snapping/writing {t3-t2:.2f}s")
