@@ -11,10 +11,10 @@
 set -Eeuo pipefail
 
 PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis
-GNN_DATA=/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_v3
+GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt}"
 VENV="${VENV:-$PROJECT_ROOT/.venv-gnn}"
 # Use the original training run folder containing best.pt.
-RUN_TAG="${RUN_TAG:-fullgraph_100Ep_resume_001}"
+RUN_TAG="${RUN_TAG:-tt_001}"
 EVAL_SPLIT="${EVAL_SPLIT:-val}"  # val, test, or train
 CHECKPOINT="${CHECKPOINT:-$GNN_DATA/runs/$RUN_TAG/best.pt}"
 OUTPUT="${OUTPUT:-$GNN_DATA/runs/$RUN_TAG/evaluation_$EVAL_SPLIT}"

@@ -11,8 +11,9 @@
 set -Eeuo pipefail
 
 PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis
-DATASET=/vast.mnt/home/20201733/locarno_ETH_Model/training_dataset_v3
-GNN_DATA=/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_v3
+DATASET="${DATASET:-/vast.mnt/home/20201733/locarno_ETH_Model/training_dataset_v4}"
+GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt}"
+PEAK_HOUR="${PEAK_HOUR:-8}"
 VENV="${VENV:-$PROJECT_ROOT/.venv-gnn}"
 WORKERS="${PREP_WORKERS:-4}"
 
@@ -31,6 +32,7 @@ python -m gnn_surrogate.dataset.prepare_hpc \
     --dataset "$DATASET" \
     --out "$GNN_DATA" \
     --workers "$WORKERS" \
-    --seed 42
+    --seed 42 \
+    --hour "$PEAK_HOUR"
 
 echo "$(date -Is) Preprocessing completed. Splits: $GNN_DATA/splits.json"

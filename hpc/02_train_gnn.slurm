@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH --job-name=locarno-gnn-train-cont
+#SBATCH --job-name=locarno-gnn-train
 #SBATCH --partition=tue.gpu2.q,tue.gpu3.q
 #SBATCH --gpus=1
 #SBATCH --nodes=1
@@ -7,17 +7,17 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --gpus=1
-#SBATCH --time=6:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_train_%j.out
 #SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_train_%j.err
 set -Eeuo pipefail
 
 PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis
-GNN_DATA=/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_v3
+GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt}"
 VENV="${VENV:-$PROJECT_ROOT/.venv-gnn}"
 EPOCHS="${EPOCHS:-50}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
-RUN_TAG="${RUN_TAG:-full_001}"
+RUN_TAG="${RUN_TAG:-tt_001}"
 RUN_DIR="$GNN_DATA/runs/$RUN_TAG"
 # Optional: absolute path to a previous run's last.pt. The output RUN_TAG
 # must be new; EPOCHS is the cumulative count (e.g., 100 resumes 51..100).
