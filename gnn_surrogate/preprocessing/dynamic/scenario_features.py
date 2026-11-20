@@ -15,8 +15,10 @@ import pandas as pd
 
 from network_sampling.network.matsim_network import load_matsim_network
 
-# All features are zero for an unmodified baseline scenario. Keep the input
-# selector separate so alternative feature sets are easy to test later.
+# Intervention-change features are zero for unchanged baseline links.
+# The dedicated_bus_lane indicator is the one exception: it reports an
+# eligible bus-specific *_spec link in the SCENARIO, including baseline ones.
+# Keep the input selector separate for later feature-set tests.
 DEFAULT_DYNAMIC_COLUMNS = (
     "bicycle_street", "protected_bike_lane", "dedicated_bus_lane", "destination_only",
     "car_capacity_change_fraction", "car_freespeed_change_fraction",
@@ -64,10 +66,11 @@ def build_scenario_feature_table(
 ) -> pd.DataFrame:
     """Return [N, 9] raw scenario-change features in fixed node order.
 
-    Bike streets / PBLs are marked on both directions. Dedicated bus lanes are
-    marked only on their target direction. Destination-only is marked only on
-    baseline car-accessible directions. Road-space effects come from the ACTUAL
-    scenario network, not inferred from the intervention variant.
+    Bike streets / PBLs are marked on both directions. The dedicated_bus_lane
+    feature denotes presence of a finite-speed bus *_spec link in the scenario,
+    including *_spec links already present in the baseline. Destination-only
+    is marked only on baseline car-accessible directions. Road-space effects
+    come from the ACTUAL scenario network.
     """
     n = len(nodes)
     keys = _node_lookup(nodes)
@@ -172,7 +175,18 @@ def build_scenario_feature_table(
             if i in existing:
                 raise ValueError(f"Duplicate bus lane direction on segment {sid}")
             existing.add(i)
-            data[kind][i] = 1.0
+
+    # Encode bus-specific link PRESENCE, not merely a newly selected intervention.
+    # This makes the bus-output eligibility mask available directly from
+    # x_dynamic, for both baseline and newly created *_spec links.
+    for node_id, links in scenario_links.items():
+        data["dedicated_bus_lane"][node_id] = float(any(
+            link.id.endswith("_spec")
+            and "bus" in link.allowed_modes
+            and np.isfinite(link.freespeed)
+            and link.freespeed > 0
+            for link in links
+        ))
 
     np.divide(scen_cap - base_cap, base_cap,
               out=data["car_capacity_change_fraction"], where=base_cap > 0)

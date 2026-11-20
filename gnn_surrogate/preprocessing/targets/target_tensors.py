@@ -1,168 +1,164 @@
-"""Construct per-scenario hourly flow targets on the fixed directed-street graph.
+"""Morning-peak link-travel-time targets on the existing fixed directed graph.
 
-This module reads only a scenario's saved link_mapping.csv.gz and sparse
-MATSim output_detailed_link_statistics.csv.gz, plus the fixed graph nodes and
-already-built *raw* baseline hourly tensor. It never reads scenario/network XML
-or intervention labels, and adds no features.
+Channels: 0 = general road (car/truck/car_passenger); 1 = bus-specific *_spec.
+The full fixed graph is retained; invalid channels are masked for the loss.
 """
 from __future__ import annotations
 
+import gzip
 import json
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from gnn_surrogate.preprocessing.static.input_tensors import FLOW_MODES, _check_node_order
+from gnn_surrogate.preprocessing.static.input_tensors import _check_node_order
+
+CHANNELS = ("road", "bus_spec")
+ROAD_MODES = {"car", "truck", "car_passenger"}
+SLOTS = ("segment_id", "from_node", "to_node")
 
 
-SLOT_COLUMNS = ("segment_id", "from_node", "to_node")
+def _read_network_modes(path: Path) -> dict[str, tuple[set[str], str, str]]:
+    opener = gzip.open if str(path).endswith(".gz") else open
+    links = {}
+    with opener(path, "rb") as stream:
+        for _, elem in ET.iterparse(stream, events=("end",)):
+            if elem.tag != "link":
+                continue
+            lid = elem.attrib["id"]
+            if lid in links:
+                raise ValueError(f"Duplicate network link {lid}")
+            links[lid] = (set(elem.attrib.get("modes", "").split(",")),
+                          elem.attrib["from"], elem.attrib["to"])
+            elem.clear()
+    if not links:
+        raise ValueError(f"No links in {path}")
+    return links
 
 
-def load_scenario_hourly(
-    nodes: pd.DataFrame,
-    scenario_dir: Path,
-    *,
-    hours: int = 30,
-) -> tuple[np.ndarray, dict]:
-    """Return scenario vehicle traversals [N,T,4] and conservation diagnostics.
-
-    Several MATSim links can map to one directed GNN node. Newly generated
-    links (bike, PBL, bus) are included via the per-scenario link mapping.
-    Missing link-hour records represent zero flow. Unknown links, duplicate
-    link-hours, invalid counts and unmapped directions cause a hard failure.
-    """
+def _eligible_links(nodes: pd.DataFrame, scenario: Path, hour: int) -> pd.DataFrame:
+    """One MATSim road/bus link per (fixed node, output channel)."""
     _check_node_order(nodes)
-    if hours < 1:
-        raise ValueError("hours must be positive")
-    for col in SLOT_COLUMNS:
-        if col not in nodes:
-            raise ValueError(f"Missing fixed-node column {col}")
-    if nodes.duplicated(list(SLOT_COLUMNS)).any():
-        raise ValueError("Duplicate physical-street directional nodes")
-
-    scenario_dir = Path(scenario_dir)
-    mapping_path = scenario_dir / "link_mapping.csv.gz"
-    flow_path = scenario_dir / "targets" / "output_detailed_link_statistics.csv.gz"
-    mapping = pd.read_csv(
-        mapping_path,
-        dtype={"link_id": str, "segment_id": str, "from_node": str, "to_node": str},
-    )
-    required_map = {"link_id", *SLOT_COLUMNS}
-    if missing := required_map.difference(mapping.columns):
-        raise ValueError(f"Link mapping missing columns: {sorted(missing)}")
-    if mapping.empty or mapping[list(required_map)].isna().any().any():
-        raise ValueError("Empty or incomplete scenario link mapping")
-    if mapping.link_id.duplicated().any():
-        raise ValueError("Duplicate link IDs in scenario mapping")
-
-    slots = nodes[[*SLOT_COLUMNS, "node_id"]]
-    mapping = mapping.merge(slots, on=list(SLOT_COLUMNS), how="left", validate="many_to_one")
-    if mapping.node_id.isna().any():
-        examples = mapping.loc[mapping.node_id.isna(), "link_id"].head(5).tolist()
-        raise ValueError(f"Scenario links have no fixed graph node: {examples}")
-
-    # Confirm all existing street links still map to the same node. This also
-    # protects against accidentally pairing a scenario with the wrong graph.
-    if "baseline_link_ids" in nodes.columns:
-        baseline_lookup = {
-            str(lid): int(node.node_id)
-            for node in nodes.itertuples(index=False)
-            for lid in json.loads(node.baseline_link_ids)
-        }
-        present = mapping.set_index("link_id")["node_id"]
-        missing_baseline = baseline_lookup.keys() - present.index
-        if missing_baseline:
-            raise ValueError(
-                f"Scenario mapping is missing {len(missing_baseline)} original links "
-                f"(examples: {sorted(missing_baseline)[:5]})"
-            )
-        mismatched = [lid for lid, node_id in baseline_lookup.items()
-                      if int(present[lid]) != node_id]
-        if mismatched:
-            raise ValueError(f"Original links assigned to wrong graph nodes: {mismatched[:5]}")
-
-    cols = ["link_id", "hour", *FLOW_MODES]
-    flows = pd.read_csv(flow_path, dtype={"link_id": str}, usecols=cols)
-    if flows.empty or flows[cols].isna().any().any():
-        raise ValueError("Scenario flow file is empty or contains missing values")
-    if flows.duplicated(["link_id", "hour"]).any():
-        raise ValueError("Duplicate link-hour rows in scenario flow file")
-
-    hour_values = pd.to_numeric(flows.hour, errors="raise").to_numpy(dtype=np.float64)
-    if (not np.isfinite(hour_values).all()
-            or (hour_values != np.floor(hour_values)).any()
-            or (hour_values < 0).any() or (hour_values >= hours).any()):
-        raise ValueError(f"Flow hours must be integers within 0..{hours - 1}")
-    hour_idx = hour_values.astype(np.int64)
-
-    modal = flows[list(FLOW_MODES)].to_numpy(dtype=np.float64)
-    if (not np.isfinite(modal).all() or (modal < 0).any()
-            or (modal != np.floor(modal)).any()):
-        raise ValueError("MATSim modal flows must be finite nonnegative integer counts")
-    modal = modal.astype(np.int64)
-
-    joined = flows[["link_id"]].merge(
-        mapping[["link_id", "node_id"]], on="link_id", how="left", validate="many_to_one"
-    )
-    if joined.node_id.isna().any():
-        unknown = joined.loc[joined.node_id.isna(), "link_id"].unique()[:5].tolist()
-        raise ValueError(f"Flow records have no fixed graph mapping: {unknown}")
-    node_idx = joined.node_id.to_numpy(dtype=np.int64)
-
-    dense_int = np.zeros((len(nodes), hours, len(FLOW_MODES)), dtype=np.int64)
-    np.add.at(dense_int, (node_idx, hour_idx), modal)
-
-    # Verify conservation separately for every hour and mode (not only daily).
-    original_hourly = np.zeros((hours, len(FLOW_MODES)), dtype=np.int64)
-    np.add.at(original_hourly, hour_idx, modal)
-    if not np.array_equal(dense_int.sum(axis=0), original_hourly):
-        raise AssertionError("Scenario hourly/modal aggregation lost traffic")
-    if dense_int.max() > 2 ** 24:
-        raise ValueError("Flows exceed exact integer precision of float32")
-
-    report = {
-        "link_hour_rows": int(len(flows)),
-        "mapped_link_count": int(len(mapping)),
-        "mapped_node_count": int(mapping.node_id.nunique()),
-        "nonzero_node_hours": int(np.count_nonzero(dense_int.sum(axis=2))),
-        "scenario_totals": {mode: int(original_hourly[:, k].sum())
-                            for k, mode in enumerate(FLOW_MODES)},
-        "per_hour_conservation": True,
-    }
-    return dense_int.astype(np.float32), report
-
-
-def build_delta_targets(
-    nodes: pd.DataFrame,
-    scenario_dir: Path,
-    baseline_hourly_raw: np.ndarray,
-) -> tuple[np.ndarray, dict]:
-    """Return signed baseline-relative targets [N,T,4] in vehicles/hour.
-
-    The model can later reconstruct absolute predictions by adding the same
-    baseline_hourly_raw with models/baseline_skip.py.
-    """
-    _check_node_order(nodes)
-    baseline = np.asarray(baseline_hourly_raw)
-    if (baseline.ndim != 3 or baseline.shape[0] != len(nodes)
-            or baseline.shape[2] != len(FLOW_MODES)):
-        raise ValueError("Baseline must have shape [number of graph nodes, hours, 4]")
-    if (not np.isfinite(baseline).all() or (baseline < 0).any()
-            or (baseline != np.floor(baseline)).any()):
-        raise ValueError("Baseline raw flows must be finite nonnegative vehicle counts")
-    baseline = baseline.astype(np.float32, copy=False)
-    scenario, report = load_scenario_hourly(nodes, scenario_dir, hours=baseline.shape[1])
-    delta = scenario - baseline
-    if not np.isfinite(delta).all() or not np.array_equal(delta + baseline, scenario):
-        raise AssertionError("Baseline-relative target reconstruction failed")
-    report.update({
-        "baseline_totals": {mode: int(baseline[:, :, k].sum(dtype=np.float64))
-                            for k, mode in enumerate(FLOW_MODES)},
-        "delta_totals": {mode: int(delta[:, :, k].sum(dtype=np.float64))
-                         for k, mode in enumerate(FLOW_MODES)},
-        "changed_node_hours": int(np.count_nonzero(np.any(delta != 0, axis=2))),
-        "delta_positive_values": int(np.count_nonzero(delta > 0)),
-        "delta_negative_values": int(np.count_nonzero(delta < 0)),
+    if not 0 <= hour <= 23:
+        raise ValueError("hour must be in 0..23")
+    mapping = pd.read_csv(scenario / "link_mapping.csv.gz", dtype={
+        "link_id": str, "segment_id": str, "from_node": str,
+        "to_node": str, "baseline_link_id": str, "link_kind": str,
     })
-    return delta, report
+    if not {"link_id", *SLOTS}.issubset(mapping):
+        raise ValueError("Incomplete scenario link mapping")
+    if mapping.link_id.isna().any() or mapping.link_id.duplicated().any():
+        raise ValueError("Missing or duplicate MATSim link IDs")
+    if "baseline_link_id" not in mapping:
+        mapping["baseline_link_id"] = pd.NA
+    if "link_kind" not in mapping:
+        mapping["link_kind"] = "baseline"
+    mapping = mapping.merge(nodes[["node_id", *SLOTS]], on=list(SLOTS),
+                            how="left", validate="many_to_one")
+    if mapping.node_id.isna().any():
+        raise ValueError("Scenario mapping contains links outside the fixed graph")
+    # Preserve the old scenario-vs-baseline node-alignment check.
+    baseline_ids = {
+        lid: int(row.node_id)
+        for row in nodes.itertuples(index=False)
+        for lid in json.loads(row.baseline_link_ids)
+    }
+    by_link = mapping.set_index("link_id")["node_id"]
+    if any(lid not in by_link or int(by_link[lid]) != node
+           for lid, node in baseline_ids.items()):
+        raise ValueError("Baseline MATSim links are missing or moved in scenario mapping")
+
+    network = _read_network_modes(scenario / "network.xml.gz")
+    selected = []
+    for row in mapping.itertuples(index=False):
+        link = network.get(row.link_id)
+        if link is None:
+            raise ValueError(f"Mapped link absent from scenario network: {row.link_id}")
+        modes, u, v = link
+        if (u, v) != (row.from_node, row.to_node):
+            raise ValueError(f"Link direction mismatch: {row.link_id}")
+        channel = (1 if row.link_id.endswith("_spec") and "bus" in modes
+                   else 0 if not row.link_id.endswith("_spec") and (modes & ROAD_MODES)
+                   else None)
+        if channel is not None:
+            selected.append((row.link_id, int(row.node_id), channel,
+                             row.baseline_link_id, row.link_kind))
+    result = pd.DataFrame(selected, columns=["link_id", "node_id", "channel",
+                                             "baseline_link_id", "link_kind"])
+    if result.empty:
+        raise ValueError("No eligible road/bus links")
+    if result.duplicated(["node_id", "channel"]).any():
+        raise ValueError("Multiple MATSim links map to one node/output channel")
+
+    col = f"TRAVELTIME{hour}-{hour+1}avg"
+    stats = pd.read_csv(scenario / "targets" / "linkstats.txt.gz", sep="\t",
+                        usecols=["LINK", "FREESPEED", col], dtype={"LINK": str})
+    if stats.LINK.isna().any() or stats.LINK.duplicated().any():
+        raise ValueError("Missing or duplicate LINK in linkstats")
+    result = result.merge(stats, left_on="link_id", right_on="LINK",
+                          how="left", validate="one_to_one")
+    if result.LINK.isna().any():
+        raise ValueError("Eligible MATSim links missing from linkstats")
+    # Exclude special MATSim links with infinite/zero free-flow speed.
+    speed = result.FREESPEED.to_numpy(dtype=np.float64)
+    result = result.loc[np.isfinite(speed) & (speed > 0)].copy()
+    tt = result[col].to_numpy(dtype=np.float64)
+    if not np.isfinite(tt).all() or (tt <= 0).any():
+        raise ValueError("Eligible link has nonfinite or nonpositive travel time")
+    return result.rename(columns={col: "tt_s"})
+
+
+def build_baseline_travel_times(nodes: pd.DataFrame, baseline: Path,
+                                hour: int = 8) -> tuple[np.ndarray, np.ndarray]:
+    """Called once during fixed input preparation, not per scenario."""
+    eligible = _eligible_links(nodes, baseline, hour)
+    values = np.zeros((len(nodes), 2), dtype=np.float32)
+    present = np.zeros((len(nodes), 2), dtype=bool)
+    for row in eligible.itertuples(index=False):
+        i, ch = int(row.node_id), int(row.channel)
+        values[i, ch] = float(row.tt_s)
+        present[i, ch] = True
+    return values, present
+
+
+def build_delta_targets(nodes: pd.DataFrame, scenario: Path,
+                        baseline_tt: np.ndarray, baseline_present: np.ndarray,
+                        hour: int = 8) -> tuple[np.ndarray, np.ndarray, dict]:
+    """Return signed seconds and eligibility mask, both [N,2]."""
+    n = len(nodes)
+    if baseline_tt.shape != (n, 2) or baseline_present.shape != (n, 2):
+        raise ValueError("Baseline travel-time tensors must be [N,2]")
+    eligible = _eligible_links(nodes, scenario, hour)
+    delta = np.zeros((n, 2), dtype=np.float32)
+    valid = np.zeros((n, 2), dtype=bool)
+    baseline_ids = {
+        lid: int(row.node_id)
+        for row in nodes.itertuples(index=False)
+        for lid in json.loads(row.baseline_link_ids)
+    }
+    new_bus = 0
+    for row in eligible.itertuples(index=False):
+        i, ch = int(row.node_id), int(row.channel)
+        if ch == 0:
+            if not baseline_present[i, 0] or baseline_ids.get(row.link_id) != i:
+                raise ValueError(f"General road link lacks matching baseline: {row.link_id}")
+            ref = baseline_tt[i, 0]
+        elif baseline_ids.get(row.link_id) == i and baseline_present[i, 1]:
+            ref = baseline_tt[i, 1]  # Existing baseline bus-specific link.
+        elif (row.link_kind == "dedicated_bus_lane" and
+              baseline_ids.get(row.baseline_link_id) == i and baseline_present[i, 0]):
+            ref = baseline_tt[i, 0]  # New bus lane refers to original road.
+            new_bus += 1
+        else:
+            raise ValueError(f"Bus _spec link lacks baseline reference: {row.link_id}")
+        delta[i, ch] = float(row.tt_s) - ref
+        valid[i, ch] = True
+    if not valid[:, 0].any():
+        raise ValueError("No eligible general-road targets")
+    return delta, valid, {
+        "road_targets": int(valid[:, 0].sum()),
+        "bus_spec_targets": int(valid[:, 1].sum()),
+        "new_bus_spec_targets": new_bus,
+    }

@@ -1,4 +1,4 @@
-"""CLI: build a scenario's signed hourly targets from saved MATSim outputs."""
+"""Build masked 08:00-09:00 (configurable) travel-time change targets."""
 from __future__ import annotations
 
 import argparse
@@ -8,57 +8,33 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from gnn_surrogate.preprocessing.static.input_tensors import FLOW_MODES
-from .target_tensors import build_delta_targets
+from .target_tensors import CHANNELS, build_delta_targets
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--graph", required=True, type=Path,
-                        help="Folder with fixed dual_nodes.csv.gz and dual_edge_index.npy")
-    parser.add_argument("--inputs", required=True, type=Path,
-                        help="Folder containing fixed_inputs.npz and input_metadata.json")
-    parser.add_argument("--scenario", required=True, type=Path,
-                        help="Scenario directory with link_mapping.csv.gz and targets/")
-    parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--graph", type=Path, required=True)
+    parser.add_argument("--scenario", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--hour", type=int, default=8)
     args = parser.parse_args()
 
-    if not (args.graph / "dual_edge_index.npy").is_file():
-        raise FileNotFoundError(args.graph / "dual_edge_index.npy")
-    nodes = pd.read_csv(
-        args.graph / "dual_nodes.csv.gz",
-        dtype={"segment_id": str, "from_node": str,
-               "to_node": str, "baseline_link_ids": str},
-    )
-    metadata = json.loads((args.inputs / "input_metadata.json").read_text(encoding="utf-8"))
-    with np.load(args.inputs / "fixed_inputs.npz", allow_pickle=False) as fixed:
-        baseline = fixed["baseline_hourly_raw"]
-    if (metadata["flow_modes"] != list(FLOW_MODES)
-            or metadata["node_count"] != len(nodes)
-            or metadata["hours"] != baseline.shape[1]):
-        raise ValueError("Fixed input metadata does not match graph or flow mode order")
-
-    delta, report = build_delta_targets(nodes, args.scenario, baseline)
+    nodes = pd.read_csv(args.graph / "dual_nodes.csv.gz", dtype={
+        "segment_id": str, "from_node": str, "to_node": str, "baseline_link_ids": str})
+    with np.load(args.graph / "baseline_tt.npz", allow_pickle=False) as fixed:
+        if int(fixed["hour"]) != args.hour:
+            raise ValueError("Target hour differs from gnn_static baseline hour")
+        baseline_tt, baseline_present = fixed["baseline_tt_s"], fixed["present_mask"]
+    delta, valid, report = build_delta_targets(
+        nodes, args.scenario, baseline_tt, baseline_present, hour=args.hour)
     args.out.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(args.out / "target_delta.npz", y_delta=delta)
-    details = {
-        "scenario": args.scenario.name,
-        "shape": list(delta.shape),
-        "dtype": str(delta.dtype),
-        "flow_modes": list(FLOW_MODES),
-        "target": "scenario_hourly_raw - baseline_hourly_raw",
-        "units": "signed vehicle traversals/hour",
-        **report,
-    }
+    np.savez_compressed(args.out / "target_delta.npz", y_delta=delta, valid_mask=valid)
+    metadata = {"scenario": args.scenario.name, "shape": list(delta.shape),
+                "channels": list(CHANNELS), "hour": args.hour, "units": "seconds", **report}
     (args.out / "target_metadata.json").write_text(
-        json.dumps(details, indent=2) + "\n", encoding="utf-8"
-    )
-    print(f"Saved {args.out / 'target_delta.npz'}: {delta.shape} (N,T,M)")
-    print("Scenario modal totals: " + ", ".join(
-        f"{mode}={report['scenario_totals'][mode]:,}" for mode in FLOW_MODES))
-    print("Delta modal totals: " + ", ".join(
-        f"{mode}={report['delta_totals'][mode]:+,}" for mode in FLOW_MODES))
-    print("PASS: fixed-node mapping, per-hour conservation, baseline-relative reconstruction")
+        json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    print(f"{args.scenario.name}: y_delta={delta.shape}, valid={int(valid.sum())}, "
+          f"new bus links={report['new_bus_spec_targets']}")
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ from preprocessing.utils import PROJECT_ROOT
 
 BASELINE_NAME = "baseline_00000"
 FLOW_REL = Path("targets/output_detailed_link_statistics.csv.gz")
+LINKSTATS_REL = Path("targets/linkstats.txt.gz")
 REQUIRED_SCENARIO = ("scenario.json", "interventions.json", "network.xml.gz", "link_mapping.csv.gz")
 STATIC_FEATURES = (
     "length_m", "baseline_car_capacity", "baseline_car_freespeed_m_s",
@@ -83,6 +84,8 @@ def _completion_reason(scenario: Path, baseline_hashes: dict | None = None) -> s
                 return "scenario was generated from different baseline hashes"
         if not (scenario / FLOW_REL).is_file() or (scenario / FLOW_REL).stat().st_size == 0:
             return "missing/empty compacted link statistics"
+        if not (scenario / LINKSTATS_REL).is_file() or (scenario / LINKSTATS_REL).stat().st_size == 0:
+            return "missing/empty linkstats travel-time targets"
         summary_file = scenario / "targets/target_summary.json"
         if not summary_file.is_file():
             return "missing target_summary.json (compaction not verified)"
@@ -111,13 +114,15 @@ def _run(module: str, *arguments: object, log: Path | None = None) -> None:
                            stdout=handle, stderr=subprocess.STDOUT)
 
 
-def _fixed_inputs(source: Path, output: Path, baseline: Path) -> tuple[int, dict]:
+def _fixed_inputs(source: Path, output: Path, baseline: Path, hour: int) -> tuple[int, dict]:
     graph, inputs = output / "gnn_static", output / "gnn_inputs"
     provenance_path = output / "fixed_provenance.json"
     provenance = {
         "baseline_network_sha256": _sha256(baseline / "network.xml.gz"),
         "street_segments_sha256": _sha256(source / "street_segments.csv.gz"),
         "baseline_flows_sha256": _sha256(baseline / FLOW_REL),
+        "baseline_linkstats_sha256": _sha256(baseline / LINKSTATS_REL),
+        "travel_time_hour": hour,
         "static_features": list(STATIC_FEATURES),
     }
     if provenance_path.exists():
@@ -125,6 +130,7 @@ def _fixed_inputs(source: Path, output: Path, baseline: Path) -> tuple[int, dict
             raise ValueError("Fixed preprocessing was made from different baseline/features; use a NEW output directory")
         if not all((output / p).is_file() for p in (
             "gnn_static/dual_nodes.csv.gz", "gnn_static/dual_edge_index.npy",
+            "gnn_static/baseline_tt.npz",
             "gnn_inputs/fixed_inputs.npz", "gnn_inputs/input_metadata.json"
         )):
             raise ValueError("Fixed preprocessing artifacts are incomplete; use a NEW output directory")
@@ -137,38 +143,36 @@ def _fixed_inputs(source: Path, output: Path, baseline: Path) -> tuple[int, dict
              "--baseline-network", baseline / "network.xml.gz", "--out", graph)
         _run("gnn_surrogate.preprocessing.static.build_inputs",
              "--graph", graph, "--baseline-scenario", baseline,
-             "--features", *STATIC_FEATURES, "--out", inputs)
+             "--features", *STATIC_FEATURES, "--hour", hour, "--out", inputs)
         _save(provenance_path, provenance)
     metadata = _json(inputs / "input_metadata.json")
-    if metadata.get("static_feature_names") != list(STATIC_FEATURES):
+    if metadata.get("static_feature_names") != [*STATIC_FEATURES, "baseline_road_tt_s", "baseline_bus_tt_s"] or metadata.get("travel_time_hour") != hour:
         raise ValueError(f"Wrong selected static features: {metadata.get('static_feature_names')}")
     with np.load(inputs / "fixed_inputs.npz", allow_pickle=False) as file:
         n = file["x_static"].shape[0]
-        assert file["x_static"].shape == (n, 9)
+        assert file["x_static"].shape == (n, 11)
         assert file["baseline_hourly_raw"].shape == (n, 30, 4)
     return n, provenance
 
 
-def _validate_pair(output: Path, scenario_id: str, n: int) -> None:
+def _validate_pair(output: Path, scenario_id: str, n: int, hour: int) -> None:
     dyn = output / "dynamic" / scenario_id
     tar = output / "targets" / scenario_id
     x = np.load(dyn / "x_dynamic.npy", allow_pickle=False)
     with np.load(tar / "target_delta.npz", allow_pickle=False) as arrays:
-        y = arrays["y_delta"]
+        y, mask = arrays["y_delta"], arrays["valid_mask"]
     d = _json(dyn / "dynamic_metadata.json")
     t = _json(tar / "target_metadata.json")
-    if (x.shape != (n, 9) or y.shape != (n, 30, 4)
+    if (x.shape != (n, 9) or y.shape != (n, 2) or mask.shape != y.shape
+            or mask.dtype != np.bool_ or not mask[:, 0].any()
             or not np.isfinite(x).all() or not np.isfinite(y).all()
             or d.get("scenario") != scenario_id or t.get("scenario") != scenario_id
             or len(d.get("feature_names", [])) != 9
-            or t.get("flow_modes") != ["cars", "trucks", "bikes", "buses"]):
-        raise ValueError(f"Invalid tensor shape, metadata or nonfinite values: {scenario_id}")
-    # The daily target for buses is deliberately excluded by ScenarioDataset.
-    if not np.allclose(y[:, :, 3].sum(axis=1, dtype=np.float64), 0.0, atol=1e-4):
-        raise ValueError(f"Daily bus flows changed in {scenario_id}; investigate before training")
+            or t.get("channels") != ["road", "bus_spec"] or t.get("hour") != hour):
+        raise ValueError(f"Invalid TT target/eligibility mask for {scenario_id}")
 
 
-def _process_one(scenario: Path, output: Path, n: int) -> tuple[str, str | None]:
+def _process_one(scenario: Path, output: Path, n: int, hour: int) -> tuple[str, str | None]:
     sid = scenario.name
     dyn_root, tar_root = output / "dynamic", output / "targets"
     dyn, tar = dyn_root / sid, tar_root / sid
@@ -177,7 +181,7 @@ def _process_one(scenario: Path, output: Path, n: int) -> tuple[str, str | None]
         if dyn.exists() or tar.exists():
             if not dyn.is_dir() or not tar.is_dir():
                 raise RuntimeError("Only one of dynamic and target outputs exists; manual cleanup required")
-            _validate_pair(output, sid, n)
+            _validate_pair(output, sid, n, hour)
             return sid, None
 
         tmp_dyn = Path(tempfile.mkdtemp(prefix=f".{sid}.", dir=dyn_root))
@@ -187,20 +191,20 @@ def _process_one(scenario: Path, output: Path, n: int) -> tuple[str, str | None]
                  "--graph", output / "gnn_static", "--scenario", scenario,
                  "--out", tmp_dyn, log=log)
             _run("gnn_surrogate.preprocessing.targets.build_targets",
-                 "--graph", output / "gnn_static", "--inputs", output / "gnn_inputs",
-                 "--scenario", scenario, "--out", tmp_tar, log=log)
+                 "--graph", output / "gnn_static",
+                 "--scenario", scenario, "--hour", hour, "--out", tmp_tar, log=log)
             # Validate before publishing either output directory.
             # The temporary directory names differ; metadata still uses the source scenario ID.
             x = np.load(tmp_dyn / "x_dynamic.npy", allow_pickle=False)
             with np.load(tmp_tar / "target_delta.npz", allow_pickle=False) as arrays:
-                y = arrays["y_delta"]
-            if (x.shape != (n, 9) or y.shape != (n, 30, 4)
-                    or not np.isfinite(x).all() or not np.isfinite(y).all()
-                    or not np.allclose(y[:, :, 3].sum(axis=1, dtype=np.float64), 0.0, atol=1e-4)):
-                raise ValueError("Wrong shape, nonfinite data, or nonzero daily bus changes")
+                y, mask = arrays["y_delta"], arrays["valid_mask"]
+            if (x.shape != (n, 9) or y.shape != (n, 2) or mask.shape != y.shape
+                    or mask.dtype != np.bool_ or not mask[:, 0].any()
+                    or not np.isfinite(x).all() or not np.isfinite(y).all()):
+                raise ValueError("Wrong TT target or eligibility mask")
             tmp_dyn.rename(dyn)
             tmp_tar.rename(tar)
-            _validate_pair(output, sid, n)
+            _validate_pair(output, sid, n, hour)
         finally:
             shutil.rmtree(tmp_dyn, ignore_errors=True)
             shutil.rmtree(tmp_tar, ignore_errors=True)
@@ -213,7 +217,9 @@ def _process_one(scenario: Path, output: Path, n: int) -> tuple[str, str | None]
 
 
 def prepare(source: Path, output: Path, *, workers: int = 4, seed: int = 42,
-            max_scenarios: int = 0) -> dict:
+            max_scenarios: int = 0, hour: int = 8) -> dict:
+    if not 0 <= hour <= 23:
+        raise ValueError("hour must be in 0..23")
     source = source.resolve(strict=True)
     output = output.resolve()
     if not (source / "street_segments.csv.gz").is_file():
@@ -245,11 +251,11 @@ def prepare(source: Path, output: Path, *, workers: int = 4, seed: int = 42,
         (output / name).mkdir(exist_ok=True)
     print(f"MATSim scenarios: candidates={len(candidates)}, eligible={len(eligible)}, "
           f"excluded_failed_or_incomplete={len(excluded)}", flush=True)
-    n, provenance = _fixed_inputs(source, output, baseline)
+    n, provenance = _fixed_inputs(source, output, baseline, hour)
     started = time.monotonic()
     processed, errors = [], {}
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        tasks = {executor.submit(_process_one, sc, output, n): sc.name for sc in eligible}
+        tasks = {executor.submit(_process_one, sc, output, n, hour): sc.name for sc in eligible}
         for index, future in enumerate(as_completed(tasks), 1):
             sid, error = future.result()
             if error:
@@ -289,10 +295,10 @@ def prepare(source: Path, output: Path, *, workers: int = 4, seed: int = 42,
     # One real dataset item verifies the final loader (including bus exclusion).
     dataset = ScenarioDataset(output / "gnn_static", output / "gnn_inputs",
                               output / "dynamic", output / "targets",
-                              scenario_ids=[splits["train"][0]], temporal_mode="daily")
+                              scenario_ids=[splits["train"][0]])
     sample = dataset[0]
-    if sample["y_delta"].shape != (n, 3):
-        raise AssertionError("Final daily dataset unexpectedly lacks three targets")
+    if sample["y_delta"].shape != (n, 2) or sample["valid_mask"].shape != (n, 2):
+        raise AssertionError("Final TT dataset target or eligibility mask has wrong shape")
     output_bytes = sum(file.stat().st_size for folder in (output / "dynamic", output / "targets")
                        for file in folder.rglob("*") if file.is_file())
     print(f"PASS: {len(processed)} completed, validated GNN scenarios; "
@@ -307,11 +313,13 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--hour", type=int, default=8,
+                        help="Peak-hour start (8 = 08:00-09:00)")
     parser.add_argument("--max-scenarios", type=int, default=0,
                         help="Optional pilot cap on eligible scenarios; default 0 processes all")
     args = parser.parse_args()
     prepare(args.dataset, args.out, workers=args.workers,
-            seed=args.seed, max_scenarios=args.max_scenarios)
+            seed=args.seed, max_scenarios=args.max_scenarios, hour=args.hour)
 
 
 if __name__ == "__main__":

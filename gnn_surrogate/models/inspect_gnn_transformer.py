@@ -14,7 +14,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from gnn_surrogate.dataset.dataset import ScenarioDataset, load_splits
-from gnn_surrogate.training.losses import mode_balanced_mse_loss
+from gnn_surrogate.training.losses import masked_mse_loss
 from .gnn_transformer import GNNTransformer
 from preprocessing.utils import PROJECT_ROOT
 
@@ -35,7 +35,6 @@ def main() -> None:
         GNN_DIR / "dynamic",
         GNN_DIR / "targets",
         scenario_ids=splits["train"],
-        temporal_mode="daily",
     )
     fixed = dataset.fixed
     batch = next(iter(DataLoader(dataset, batch_size=min(SMOKE_BATCH_SIZE, len(dataset)))))
@@ -75,10 +74,8 @@ def main() -> None:
     assert pred.shape == y_delta.shape
     assert torch.isfinite(pred).all()
 
-    # Use sample-derived scales solely to verify differentiable loss plumbing.
-    # Final training scales must come from the full TRAIN split.
-    scales = y_delta.square().mean(dim=(0, 1)).sqrt().clamp_min(0.001)
-    loss = mode_balanced_mse_loss(pred, y_delta, scales)
+    mask = batch["valid_mask"][:, :n].to(device)
+    loss = masked_mse_loss(pred, y_delta, mask)
     loss.backward()
     grads = [p.grad for p in model.parameters() if p.requires_grad]
     assert grads and all(g is not None and torch.isfinite(g).all() for g in grads)

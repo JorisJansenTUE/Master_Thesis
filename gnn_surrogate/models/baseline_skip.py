@@ -1,7 +1,7 @@
-"""Reconstruct absolute modal flows by adding raw baseline to predicted changes.
+"""Reconstruct absolute link travel times by adding baseline to predicted changes.
 
 Works for daily [N,M]/[B,N,M], and optional hourly [N,T,M]/[B,N,T,M].
-The baseline must be RAW counts in the same temporal units as the prediction.
+Both baseline and predicted differences must be in seconds.
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ def _compatible_baseline(predicted: Tensor, baseline: Tensor) -> bool:
 
 
 class BaselineSkip(nn.Module):
-    """Add fixed raw baseline counts to signed predicted deltas; no clamping."""
+    """Add fixed baseline travel times to signed predicted deltas; no clamping."""
 
     def forward(self, predicted_change: Tensor, baseline_raw: Tensor) -> Tensor:
         if not _compatible_baseline(predicted_change, baseline_raw):
@@ -32,7 +32,7 @@ class BaselineSkip(nn.Module):
 
 
 def baseline_relative_target(scenario_raw: Tensor, baseline_raw: Tensor) -> Tensor:
-    """Signed changes: scenario flows minus baseline flows, in identical units."""
+    """Signed changes: scenario travel times minus baseline travel times, in identical units."""
     if not _compatible_baseline(scenario_raw, baseline_raw):
         raise ValueError(
             f"Incompatible scenario/baseline shapes: "

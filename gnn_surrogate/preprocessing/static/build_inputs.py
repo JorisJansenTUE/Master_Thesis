@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from .input_tensors import DEFAULT_STATIC_COLUMNS, select_input_tensors
+from gnn_surrogate.preprocessing.targets.target_tensors import build_baseline_travel_times
 
 
 def main() -> None:
@@ -21,6 +22,8 @@ def main() -> None:
     parser.add_argument("--features", nargs="+", default=list(DEFAULT_STATIC_COLUMNS),
                         help="Numeric columns from dual_nodes.csv.gz to select")
     parser.add_argument("--hours", type=int, default=30)
+    parser.add_argument("--hour", type=int, default=8,
+                        help="Morning peak hour for baseline travel-time features")
     args = parser.parse_args()
 
     # Prevent accidentally using an intervention scenario's flows as baseline inputs.
@@ -39,9 +42,21 @@ def main() -> None:
         raise FileNotFoundError(graph_edges)
     nodes = pd.read_csv(graph_nodes, dtype={"baseline_link_ids": str})
     baseline_path = args.baseline_scenario / "targets" / "output_detailed_link_statistics.csv.gz"
+    # Build baseline travel-time references once, alongside the fixed graph.
+    # Two channels: ordinary road and existing bus _spec link; absence is masked.
+    tt, present = build_baseline_travel_times(nodes, args.baseline_scenario, args.hour)
+    np.savez_compressed(args.graph / "baseline_tt.npz",
+                        baseline_tt_s=tt, present_mask=present,
+                        hour=np.asarray(args.hour, dtype=np.int16))
+    # Feed baseline travel times as two additional static node features.
+    # For a newly created _spec link, its reference is the original road time.
+    nodes["baseline_road_tt_s"] = tt[:, 0]
+    nodes["baseline_bus_tt_s"] = np.where(present[:, 1], tt[:, 1], tt[:, 0])
+    columns = tuple(args.features) + ("baseline_road_tt_s", "baseline_bus_tt_s")
     arrays, metadata = select_input_tensors(
-        nodes, baseline_path, columns=tuple(args.features), hours=args.hours
+        nodes, baseline_path, columns=columns, hours=args.hours
     )
+    metadata["travel_time_hour"] = args.hour
     args.out.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(args.out / "fixed_inputs.npz", **arrays)
     (args.out / "input_metadata.json").write_text(

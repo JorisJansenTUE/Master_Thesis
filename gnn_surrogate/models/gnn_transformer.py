@@ -4,12 +4,11 @@ Inspired by the best-performing architecture in Natterer et al. (2025):
   2 TransformerConv + GraphNorm layers, followed by 3 global Transformer
   Encoder layers, with 4 attention heads and 192-dimensional embeddings.
 
-Unlike the original single-output model, predicts daily changes in three
-modal flows (cars, trucks, bikes). Positional features (mid_x, mid_y) are
+Predicts one-hour link travel-time changes for road and bus-specific links. Positional features (mid_x, mid_y) are
 already included in the fixed ``x_static`` tensor.
 
-The model returns SIGNED DELTAS, not absolute counts; apply BaselineSkip
-outside this model with the matching RAW baseline counts.
+The model returns signed travel-time changes (seconds). Add the fixed
+baseline road/bus reference times to reconstruct absolute travel times.
 """
 from __future__ import annotations
 
@@ -27,13 +26,13 @@ except ImportError as exc:
 
 
 class GNNTransformer(nn.Module):
-    """Predict signed, baseline-relative daily flows on a fixed dual graph.
+    """Predict signed, baseline-relative link travel times on a fixed dual graph.
 
     Args:
-        static_dim: Number of selected static features (default 9).
+        static_dim: Number of selected static features (default 11).
         dynamic_dim: Number of scenario-specific features (default 9).
         baseline_dim: Number of baseline modal inputs (default 4).
-        output_dim: Number of predicted modal changes (default 3).
+        output_dim: Number of predicted road/bus TT changes (default 2).
         hidden_dim: Node embedding width (Natterer: 192).
         heads: Attention heads for both stages (Natterer: 4).
         graph_layers: TransformerConv layer count (Natterer: 2).
@@ -57,10 +56,10 @@ class GNNTransformer(nn.Module):
     def __init__(
         self,
         *,
-        static_dim: int = 9,
+        static_dim: int = 11,
         dynamic_dim: int = 9,
         baseline_dim: int = 4,
-        output_dim: int = 3,
+        output_dim: int = 2,
         hidden_dim: int = 192,
         heads: int = 4,
         graph_layers: int = 2,
