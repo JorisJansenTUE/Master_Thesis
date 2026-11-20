@@ -3,8 +3,8 @@
 #SBATCH --partition=mech-cst-mov.cpu.q
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=48G
 #SBATCH --time=06:00:00
 #SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_prep_%j.out
 #SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_prep_%j.err
@@ -15,7 +15,7 @@ DATASET="${DATASET:-/vast.mnt/home/20201733/locarno_ETH_Model/training_dataset_v
 GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt}"
 PEAK_HOUR="${PEAK_HOUR:-8}"
 VENV="${VENV:-$PROJECT_ROOT/.venv-gnn}"
-WORKERS="${PREP_WORKERS:-4}"
+WORKERS="${PREP_WORKERS:-12}"
 
 module purge
 module load Umbrella/2024
