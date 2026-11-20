@@ -20,12 +20,12 @@ from accessibility.inputs.links.network import load_road_networks
 
 from preprocessing.utils import PROJECT_ROOT
 
-RUN_DIR = PROJECT_ROOT / "data" / "Simulated_Runs" / "baseline_00000"
+RUN_DIR = PROJECT_ROOT / "data" / "Simulated_Runs_v2" / "baseline_00000"
 NETWORK_FILE = RUN_DIR / "network.xml.gz"
-LINKSTATS_FILE = RUN_DIR / "200.linkstats.txt.gz"
+LINKSTATS_FILE = RUN_DIR / "targets" / "linkstats.txt.gz"
 STUDY_AREA_FILE = PROJECT_ROOT / "data" / "raw"/ "shapes" / "REV_Cintura_project.shp"
 STATENT_FILE = Path(r"C:\Users\20201733\Documents\Thesis\Data\Swiss_FSO\Employment-STATENT2023.zip")
-OUTPUT_DIR = PROJECT_ROOT / "accessibility" / "outputs" / "spatial_baseline"
+OUTPUT_DIR = PROJECT_ROOT / "data" / "accessibility" / "spatial_baseline"
 
 HEXAGON_DIAMETER_M = 500.0
 MIN_HEXAGON_COVERAGE = 0.0

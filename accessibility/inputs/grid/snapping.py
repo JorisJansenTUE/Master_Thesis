@@ -134,3 +134,75 @@ class RoadSnapIndex:
             unsnapped_ids=tuple(unsnapped),
             nearest_distances_m=nearest_distances_m,
         )
+
+
+@dataclass(slots=True)
+class ModeRoadAttachments:
+    """In-memory origin/job attachments for one mode and one scenario."""
+
+    origins: PointAttachments
+    jobs: PointAttachments
+
+
+class ScenarioRoadSnapper:
+    """Attach fixed origins/jobs to the *current* car or bike network.
+
+    Construct once from the baseline spatial input tables. Call :meth:`attach`
+    for each scenario's mode-specific graph. The spatial index is built from
+    the actual allowed links in that graph, so removed links, new directions,
+    and fallback to the nearest remaining street work automatically.
+
+    No scenario connector files or intervention interpretation are involved.
+    Nothing is cached against a mutable network: every call reflects the
+    supplied graph, even when it is changed in place between scenarios.
+    """
+
+    def __init__(
+        self,
+        origins: pd.DataFrame,
+        jobs: pd.DataFrame,
+        *,
+        max_origin_distance_m: float = 500.0,
+        max_job_distance_m: float = 300.0,
+    ) -> None:
+        if not isfinite(max_origin_distance_m) or max_origin_distance_m <= 0:
+            raise ValueError("max_origin_distance_m must be finite and positive")
+        if not isfinite(max_job_distance_m) or max_job_distance_m <= 0:
+            raise ValueError("max_job_distance_m must be finite and positive")
+        for name, table, columns in (
+            ("origins", origins, ("hex_id", "origin_x", "origin_y")),
+            ("jobs", jobs, ("job_id", "x", "y")),
+        ):
+            if missing := set(columns).difference(table.columns):
+                raise ValueError(f"{name} missing columns: {sorted(missing)}")
+            if table[columns[0]].isna().any() or table[columns[0]].astype(str).duplicated().any():
+                raise ValueError(f"{name} must have unique, non-null point IDs")
+            coordinates = table[list(columns[1:])].to_numpy(dtype=float)
+            if not pd.notna(coordinates).all() or not all(map(isfinite, coordinates.flat)):
+                raise ValueError(f"{name} contains invalid coordinates")
+
+        # Copy only needed columns, protecting fixed inputs against caller edits.
+        self.origins = origins[["hex_id", "origin_x", "origin_y"]].copy()
+        self.jobs = jobs[["job_id", "x", "y"]].copy()
+        self.max_origin_distance_m = float(max_origin_distance_m)
+        self.max_job_distance_m = float(max_job_distance_m)
+
+    def attach(self, graph: nx.MultiDiGraph) -> ModeRoadAttachments:
+        """Return both connector tables, in memory, for the given modal graph.
+
+        ``graph`` must be the car- or bike-filtered graph produced by
+        ``CarNetwork`` or ``BikeNetwork``. Linkstats costs do not affect snapping.
+        """
+        index = RoadSnapIndex(graph)
+        return ModeRoadAttachments(
+            origins=index.attach(
+                self.origins,
+                id_column="hex_id", x_column="origin_x", y_column="origin_y",
+                max_distance_m=self.max_origin_distance_m,
+            ),
+            jobs=index.attach(
+                self.jobs,
+                id_column="job_id", x_column="x", y_column="y",
+                max_distance_m=self.max_job_distance_m,
+            ),
+        )

@@ -20,9 +20,9 @@ from accessibility.inputs.links.schedule import TransitSchedule
 
 from preprocessing.utils import PROJECT_ROOT
 
-RUN_DIR = PROJECT_ROOT / "data" / "Simulated_Runs" / "baseline_00000"
+RUN_DIR = PROJECT_ROOT / "data" / "Simulated_Runs_v2" / "baseline_00000"
 SCHEDULE_FILE = RUN_DIR / "transit_schedule.xml.gz"
-SPATIAL_DIR = PROJECT_ROOT / "accessibility" / "outputs" / "spatial_baseline"
+SPATIAL_DIR = PROJECT_ROOT / "data" / "accessibility" / "spatial_baseline"
 OUTPUT_DIR = SPATIAL_DIR
 
 # Straight-line catchment radius. Every served stop in the radius is retained.
@@ -30,7 +30,7 @@ MAX_ORIGIN_STOP_DISTANCE_M = 800.0
 MAX_JOB_STOP_DISTANCE_M = 800.0
 WALK_SPEED_M_S = 1.3
 WALK_DETOUR_FACTOR = 1.3  # Matsim default approximation; raise if desired
-EXPORT_GPKG = True
+EXPORT_GPKG = False
 
 
 def _describe(label: str, result) -> None:
