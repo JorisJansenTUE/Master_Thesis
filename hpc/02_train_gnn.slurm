@@ -15,7 +15,7 @@ set -Eeuo pipefail
 PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis
 GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt}"
 VENV="${VENV:-$PROJECT_ROOT/.venv-gnn}"
-EPOCHS="${EPOCHS:-50}"
+EPOCHS="${EPOCHS:-100}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
 RUN_TAG="${RUN_TAG:-tt_001}"
 RUN_DIR="$GNN_DATA/runs/$RUN_TAG"
