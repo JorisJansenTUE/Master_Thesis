@@ -23,7 +23,7 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-OUTPUT_ROOT = PROJECT_ROOT / "data" / "accessibility" / "outputs"
+OUTPUT_ROOT = PROJECT_ROOT / "data" / "accessibility" / "base_mapping"
 
 BASELINE = "baseline_00000"
 SCENARIOS = (
@@ -48,7 +48,7 @@ SAVE_DIR = OUTPUT_ROOT / "scenario_comparisons"
 def load_results(scenario):
     path = (
         OUTPUT_ROOT
-        / f"results_{scenario}"
+        / f"results_{scenario}_facilities"
         / "accessibility_by_hexagon.csv"
     )
     return pd.read_csv(path, dtype={"hex_id": str})
@@ -57,7 +57,7 @@ def load_results(scenario):
 def load_hexagons():
     path = (
         OUTPUT_ROOT
-        / f"results_{BASELINE}"
+        / f"results_{BASELINE}_facilities"
         / "accessibility_hexagons.gpkg"
     )
 
@@ -236,7 +236,7 @@ def main():
     for name in SCENARIOS:
         path = (
             OUTPUT_ROOT
-            / f"results_{name}"
+            / f"results_{name}_facilities"
             / "accessibility_by_hexagon.csv"
         )
         if path.exists():

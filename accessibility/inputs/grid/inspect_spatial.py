@@ -23,7 +23,7 @@ from preprocessing.utils import PROJECT_ROOT
 
 RUN_DIR = PROJECT_ROOT / "data" / "Simulated_Runs_v2" / "baseline_00000"
 NETWORK_FILE = RUN_DIR / "network.xml.gz"
-LINKSTATS_FILE = RUN_DIR / "200.linkstats.txt.gz"
+LINKSTATS_FILE = RUN_DIR / "targets" / "linkstats.txt.gz"
 STUDY_AREA_FILE = PROJECT_ROOT / "data" / "raw"/ "shapes" / "REV_Cintura_project.shp"
 OUTPUT_DIR = dest.spatial_dir()  # Per-source, prevents STATENT/facilities collisions
 

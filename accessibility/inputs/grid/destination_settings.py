@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+from preprocessing.utils import PROJECT_ROOT
 
 # Select "statent" (employees per 100 m cell) or "facilities" (one work
 # opportunity per MATSim facility containing the configured activity type).
-DESTINATION_SOURCE = "statent"
+DESTINATION_SOURCE = "facilities"
 
 STATENT_FILE = Path(
     r"C:\Users\20201733\Documents\Thesis\Data\Swiss_FSO\Employment-STATENT2023.zip"
@@ -22,14 +22,14 @@ STATENT_FILE = Path(
 # Supported input types: .xml and .xml.gz.
 FACILITIES_FILE = (
     PROJECT_ROOT / "data" / "Simulated_Runs_v2"
-    / "baseline_00000" / "facilities.xml.gz"
+    / "baseline_00000" / "locarno_facilities.xml.gz"
 )
 
 # Exact MATSim activity-option type names; adjust if your facility file uses
 # e.g. "work_1" or another label. Only one opportunity per matching facility.
 WORK_ACTIVITY_TYPES = ("work",)
 
-OUTPUT_ROOT = PROJECT_ROOT / "accessibility" / "outputs"
+OUTPUT_ROOT = PROJECT_ROOT / "data" /"accessibility" / "base_mapping"
 
 
 def source_key() -> str:
