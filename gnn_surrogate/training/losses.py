@@ -1,4 +1,4 @@
-"""MSE of baseline-relative travel-time changes on eligible road/bus links."""
+"""MSE of baseline-relative travel-time changes on eligible road links."""
 from __future__ import annotations
 
 import torch

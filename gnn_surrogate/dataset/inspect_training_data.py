@@ -19,7 +19,7 @@ def main():
     print("Fixed:", {k: tuple(v.shape) for k, v in data.fixed.items()})
     print("Dynamic:", tuple(item["x_dynamic"].shape),
           "target:", tuple(item["y_delta"].shape))
-    print("Eligible road / bus:", item["valid_mask"].sum(dim=0).tolist())
+    print("Eligible road:", item["valid_mask"].sum(dim=0).tolist())
     loss = masked_mse_loss(torch.zeros_like(item["y_delta"]),
                            item["y_delta"], item["valid_mask"])
     print("No-change MSE [seconds^2]:", float(loss))

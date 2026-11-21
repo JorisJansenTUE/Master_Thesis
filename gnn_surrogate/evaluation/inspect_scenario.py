@@ -4,8 +4,7 @@ Run from the project root:
     python -m gnn_surrogate.evaluation.inspect_scenario
 
 Configure paths and SCENARIO_ID below; no command-line arguments required.
-Works with the current road + bus_spec model, and also a future road-only
-model when its ScenarioDataset and checkpoint use a single output channel.
+Works with the road-only single-output travel-time surrogate.
 """
 from __future__ import annotations
 
@@ -18,13 +17,13 @@ import torch
 
 from gnn_surrogate.dataset.dataset import ScenarioDataset
 from gnn_surrogate.preprocessing.targets.target_tensors import _eligible_links
-from preprocessing.utils import PROJECT_ROOT
+
 
 # ---------------------------- LOCAL SETTINGS -------------------------------
-
-GNN_DIR = Path("/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+GNN_DIR = Path("/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt_road")
 SIMULATIONS_DIR = Path("/vast.mnt/home/20201733/locarno_ETH_Model/training_dataset_v4")
-RUN_TAG = "tt_001"
+RUN_TAG = "tt_road_001"
 SCENARIO_ID = "corridor_00828"
 BASELINE_ID = "baseline_00000"
 CHECKPOINT = GNN_DIR / "runs" / RUN_TAG / "best.pt"
@@ -87,10 +86,8 @@ def build_link_table(dataset: ScenarioDataset, pred: np.ndarray, truth: np.ndarr
     # Use the SAME network/linkstats eligibility mapping as target preprocessing.
     scenario = SIMULATIONS_DIR / SCENARIO_ID
     eligible = _eligible_links(nodes, scenario, dataset.hour)
-    eligible = eligible[["node_id", "channel", "link_id", "link_kind",
-                         "baseline_link_id", "tt_s", "FREESPEED"]]
-    rows = rows.merge(eligible, on=["node_id", "channel"], how="left",
-                      validate="one_to_one")
+    eligible = eligible[["node_id", "link_id", "tt_s", "FREESPEED"]]
+    rows = rows.merge(eligible, on="node_id", how="left", validate="one_to_one")
     if rows.link_id.isna().any():
         raise ValueError("Eligible target could not be mapped back to a MATSim link")
     diff = (rows.actual_tt_s - rows.tt_s).abs().max()
@@ -107,11 +104,8 @@ def build_link_table(dataset: ScenarioDataset, pred: np.ndarray, truth: np.ndarr
     rows = rows.rename(columns={volume_col: "hourly_volume_avg",
                                 "CAPACITY": "scenario_capacity"}).drop(columns=["LINK", "tt_s"])
 
-    # Compare the actual baseline linkstats with the saved baseline reference.
-    # Newly-created *_spec links refer to their original general road link.
+    # Compare the actual baseline road linkstats with the cached reference.
     rows["baseline_ref_link_id"] = rows.link_id
-    is_new_spec = rows.link_kind.eq("dedicated_bus_lane") & rows.channel.eq(1)
-    rows.loc[is_new_spec, "baseline_ref_link_id"] = rows.loc[is_new_spec, "baseline_link_id"]
     base_stats = pd.read_csv(SIMULATIONS_DIR / BASELINE_ID / "targets" / "linkstats.txt.gz",
                              sep="\t", dtype={"LINK": str},
                              usecols=["LINK", "LENGTH", "FREESPEED", "CAPACITY",

@@ -1,7 +1,7 @@
 """Prepare the Locarno GNN dataset from completed MATSim scenarios only.
 
 Run from the Master_Thesis repository root, normally via hpc/01_prepare_dataset.slurm.
-The source training_dataset_v3 is read-only. Outputs contain compact tensors,
+The source simulation directory is read-only. Outputs contain compact tensors,
 not copies of simulation networks or routes.
 """
 from __future__ import annotations
@@ -124,6 +124,8 @@ def _fixed_inputs(source: Path, output: Path, baseline: Path, hour: int) -> tupl
         "baseline_linkstats_sha256": _sha256(baseline / LINKSTATS_REL),
         "travel_time_hour": hour,
         "static_features": list(STATIC_FEATURES),
+        "target_representation": "road_travel_time_delta_v2",
+        "baseline_flow_window": "target_hour",
     }
     if provenance_path.exists():
         if _json(provenance_path) != provenance:
@@ -146,11 +148,11 @@ def _fixed_inputs(source: Path, output: Path, baseline: Path, hour: int) -> tupl
              "--features", *STATIC_FEATURES, "--hour", hour, "--out", inputs)
         _save(provenance_path, provenance)
     metadata = _json(inputs / "input_metadata.json")
-    if metadata.get("static_feature_names") != [*STATIC_FEATURES, "baseline_road_tt_s", "baseline_bus_tt_s"] or metadata.get("travel_time_hour") != hour:
+    if metadata.get("static_feature_names") != [*STATIC_FEATURES, "baseline_road_tt_s"] or metadata.get("travel_time_hour") != hour:
         raise ValueError(f"Wrong selected static features: {metadata.get('static_feature_names')}")
     with np.load(inputs / "fixed_inputs.npz", allow_pickle=False) as file:
         n = file["x_static"].shape[0]
-        assert file["x_static"].shape == (n, 11)
+        assert file["x_static"].shape == (n, 10)
         assert file["baseline_hourly_raw"].shape == (n, 30, 4)
     return n, provenance
 
@@ -163,12 +165,12 @@ def _validate_pair(output: Path, scenario_id: str, n: int, hour: int) -> None:
         y, mask = arrays["y_delta"], arrays["valid_mask"]
     d = _json(dyn / "dynamic_metadata.json")
     t = _json(tar / "target_metadata.json")
-    if (x.shape != (n, 9) or y.shape != (n, 2) or mask.shape != y.shape
+    if (x.shape != (n, 9) or y.shape != (n, 1) or mask.shape != y.shape
             or mask.dtype != np.bool_ or not mask[:, 0].any()
             or not np.isfinite(x).all() or not np.isfinite(y).all()
             or d.get("scenario") != scenario_id or t.get("scenario") != scenario_id
             or len(d.get("feature_names", [])) != 9
-            or t.get("channels") != ["road", "bus_spec"] or t.get("hour") != hour):
+            or t.get("channels") != ["road"] or t.get("hour") != hour):
         raise ValueError(f"Invalid TT target/eligibility mask for {scenario_id}")
 
 
@@ -198,7 +200,7 @@ def _process_one(scenario: Path, output: Path, n: int, hour: int) -> tuple[str, 
             x = np.load(tmp_dyn / "x_dynamic.npy", allow_pickle=False)
             with np.load(tmp_tar / "target_delta.npz", allow_pickle=False) as arrays:
                 y, mask = arrays["y_delta"], arrays["valid_mask"]
-            if (x.shape != (n, 9) or y.shape != (n, 2) or mask.shape != y.shape
+            if (x.shape != (n, 9) or y.shape != (n, 1) or mask.shape != y.shape
                     or mask.dtype != np.bool_ or not mask[:, 0].any()
                     or not np.isfinite(x).all() or not np.isfinite(y).all()):
                 raise ValueError("Wrong TT target or eligibility mask")
@@ -292,12 +294,12 @@ def prepare(source: Path, output: Path, *, workers: int = 4, seed: int = 42,
         _save(split_path, splits)
     print("Split counts:", {name: len(splits[name]) for name in ("train", "val", "test")}, flush=True)
 
-    # One real dataset item verifies the final loader (including bus exclusion).
+    # One real dataset item verifies the final loader (including road eligibility).
     dataset = ScenarioDataset(output / "gnn_static", output / "gnn_inputs",
                               output / "dynamic", output / "targets",
                               scenario_ids=[splits["train"][0]])
     sample = dataset[0]
-    if sample["y_delta"].shape != (n, 2) or sample["valid_mask"].shape != (n, 2):
+    if sample["y_delta"].shape != (n, 1) or sample["valid_mask"].shape != (n, 1):
         raise AssertionError("Final TT dataset target or eligibility mask has wrong shape")
     output_bytes = sum(file.stat().st_size for folder in (output / "dynamic", output / "targets")
                        for file in folder.rglob("*") if file.is_file())

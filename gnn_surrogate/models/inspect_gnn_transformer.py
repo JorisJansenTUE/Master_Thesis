@@ -21,7 +21,7 @@ from preprocessing.utils import PROJECT_ROOT
 # SETTINGS: 
 
 GNN_DIR = PROJECT_ROOT / "data" / "GNN"
-SPLITS_FILE = GNN_DIR / "splits_local.json"
+SPLITS_FILE = GNN_DIR / "splits.json"
 SMOKE_NODES = 128       # Keep small for local CPU checks of full attention
 SMOKE_BATCH_SIZE = 2    # Check scenarios do not mix in the Transformer
 DEVICE = "cpu"         # Change to "cuda" only if a compatible GPU is available

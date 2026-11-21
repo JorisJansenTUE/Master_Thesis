@@ -43,16 +43,14 @@ def main() -> None:
     nodes = pd.read_csv(graph_nodes, dtype={"baseline_link_ids": str})
     baseline_path = args.baseline_scenario / "targets" / "output_detailed_link_statistics.csv.gz"
     # Build baseline travel-time references once, alongside the fixed graph.
-    # Two channels: ordinary road and existing bus _spec link; absence is masked.
+    # Only general-road travel time is predicted; existing bus _spec links are not targets.
     tt, present = build_baseline_travel_times(nodes, args.baseline_scenario, args.hour)
     np.savez_compressed(args.graph / "baseline_tt.npz",
                         baseline_tt_s=tt, present_mask=present,
                         hour=np.asarray(args.hour, dtype=np.int16))
-    # Feed baseline travel times as two additional static node features.
-    # For a newly created _spec link, its reference is the original road time.
+    # Feed only the road travel time as one additional static feature.
     nodes["baseline_road_tt_s"] = tt[:, 0]
-    nodes["baseline_bus_tt_s"] = np.where(present[:, 1], tt[:, 1], tt[:, 0])
-    columns = tuple(args.features) + ("baseline_road_tt_s", "baseline_bus_tt_s")
+    columns = tuple(args.features) + ("baseline_road_tt_s",)
     arrays, metadata = select_input_tensors(
         nodes, baseline_path, columns=columns, hours=args.hours
     )

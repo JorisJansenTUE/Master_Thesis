@@ -1,8 +1,8 @@
 """Train the unchanged GNN-Transformer backbone on masked link travel-time changes.
 
 The fixed graph and baseline features are loaded once. Each scenario supplies
-its existing dynamic [N,9] features, signed travel-time deltas [N,2] in seconds,
-and a Boolean eligibility mask [N,2]. Validation selects the best checkpoint.
+its existing dynamic [N,9] features, signed road travel-time deltas [N,1] in seconds,
+and a Boolean eligibility mask [N,1]. Validation selects the best checkpoint.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from preprocessing.utils import PROJECT_ROOT
 
 GNN_DIR = PROJECT_ROOT / "data" / "GNN"
 SPLITS_FILE = GNN_DIR / "splits.json"
-RUN_DIR = GNN_DIR / "runs" / "tt_001"
+RUN_DIR = GNN_DIR / "runs" / "tt_road_001"
 DEVICE = "auto"
 MAX_NODES = None
 EPOCHS = 50
@@ -41,10 +41,10 @@ NUM_WORKERS = 0
 
 MODEL_KWARGS = dict(hidden_dim=192, heads=4, graph_layers=2,
                     transformer_layers=3, feedforward_dim=768, dropout=0.1)
-CHANNELS = ("road", "bus_spec")
+CHANNELS = ("road",)
 REGIONS = ("all", "modified", "nearby", "unchanged")
 HISTORY_COLUMNS = ("epoch", "train_mse", "val_mse", "val_road_rmse",
-                   "val_bus_spec_rmse", "val_modified_road_rmse", "epoch_seconds")
+                   "val_modified_road_rmse", "epoch_seconds")
 
 
 @dataclass
@@ -132,7 +132,7 @@ def _neighbor_mask(modified: torch.Tensor, edges: torch.Tensor) -> torch.Tensor:
 
 
 class ErrorSummary:
-    """Masked error in seconds, separately for road and bus-specific channels."""
+    """Masked error in seconds for eligible road links."""
     def __init__(self):
         self.data = {region: {mode: [0, 0.0, 0.0] for mode in CHANNELS}
                      for region in REGIONS}
@@ -324,7 +324,7 @@ def train(cfg: TrainSettings, *, model_overrides: dict | None = None) -> dict:
                 raise FloatingPointError("Nonfinite validation MSE")
             rmse = validation["metrics"]
             writer.writerow((epoch, train_loss, val_loss,
-                             rmse["all"]["rmse"]["road"], rmse["all"]["rmse"]["bus_spec"],
+                             rmse["all"]["rmse"]["road"],
                              rmse["modified"]["rmse"]["road"], time.monotonic() - started))
             stream.flush()
             print(f"Epoch {epoch:03d} train={train_loss:.5g} val={val_loss:.5g} "

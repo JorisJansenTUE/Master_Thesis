@@ -1,4 +1,4 @@
-"""Build masked 08:00-09:00 (configurable) travel-time change targets."""
+"""Build masked general-road travel-time changes for the selected hour."""
 from __future__ import annotations
 
 import argparse
@@ -34,7 +34,7 @@ def main() -> None:
     (args.out / "target_metadata.json").write_text(
         json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     print(f"{args.scenario.name}: y_delta={delta.shape}, valid={int(valid.sum())}, "
-          f"new bus links={report['new_bus_spec_targets']}")
+          f"road links={report['road_targets']}")
 
 
 if __name__ == "__main__":

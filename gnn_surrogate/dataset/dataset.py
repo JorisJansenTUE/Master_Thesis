@@ -1,4 +1,4 @@
-"""Lazy scenario dataset on the existing fixed graph, with masked TT deltas."""
+"""Lazy fixed-graph dataset with masked general-road travel-time changes."""
 from __future__ import annotations
 
 import json
@@ -15,7 +15,7 @@ DYNAMIC_FILE = "x_dynamic.npy"
 DYNAMIC_METADATA = "dynamic_metadata.json"
 TARGET_FILE = "target_delta.npz"
 TARGET_METADATA = "target_metadata.json"
-CHANNELS = ("road", "bus_spec")
+CHANNELS = ("road",)
 
 
 def _read_json(path: Path) -> dict:
@@ -54,7 +54,7 @@ def load_splits(path: Path) -> dict[str, list[str]]:
 
 
 class ScenarioDataset(Dataset):
-    """One shared graph and baseline; each item loads [N,9] and [N,2] + mask."""
+    """Shared graph; each scenario loads [N,9] dynamics, [N,1] target + mask."""
 
     def __init__(self, graph_dir: Path, inputs_dir: Path,
                  dynamic_root: Path, target_root: Path,
@@ -72,9 +72,11 @@ class ScenarioDataset(Dataset):
             self.hour = int(file["hour"])
         edges = np.load(graph_dir / "dual_edge_index.npy", allow_pickle=False)
         n = static.shape[0]
-        if (static.ndim != 2 or baseline_raw.shape != (n, 30, 4)
-                or baseline_tt.shape != (n, 2)
-                or baseline_present.shape != (n, 2)
+        hours = self.input_metadata.get("hours", 30)
+        if (static.ndim != 2 or baseline_raw.shape != (n, hours, 4)
+                or not (0 <= self.hour < hours)
+                or baseline_tt.shape != (n, 1)
+                or baseline_present.shape != (n, 1)
                 or self.input_metadata.get("travel_time_hour") != self.hour
                 or self.input_metadata.get("node_count") != n
                 or self.input_metadata.get("static_feature_names") is None
@@ -84,16 +86,13 @@ class ScenarioDataset(Dataset):
             raise ValueError("Invalid dual graph edges")
         if not all(np.isfinite(a).all() for a in (static, baseline_raw, baseline_tt)):
             raise ValueError("Nonfinite baseline features")
-        # Same four DAILY baseline flow channels as the original architecture.
-        daily = baseline_raw.sum(axis=1, dtype=np.float64).astype(np.float32)
-        # For newly created bus-specific links, baseline reference = road time.
-        reference = baseline_tt.copy()
-        reference[:, 1] = np.where(baseline_present[:, 1], baseline_tt[:, 1], baseline_tt[:, 0])
+        # Use exactly the same hour as TRAVELTIME{hour}-{hour+1}avg.
+        hourly = baseline_raw[:, self.hour, :]
         self.fixed = {
             "edge_index": torch.from_numpy(edges.astype(np.int64, copy=False)),
             "x_static": torch.from_numpy(static.astype(np.float32, copy=False)),
-            "x_baseline": torch.from_numpy(np.log1p(daily).astype(np.float32)),
-            "baseline_tt_s": torch.from_numpy(reference.astype(np.float32)),
+            "x_baseline": torch.from_numpy(np.log1p(hourly).astype(np.float32)),
+            "baseline_tt_s": torch.from_numpy(baseline_tt.astype(np.float32)),
         }
         self.n_nodes = n
         self.target_channels = list(CHANNELS)
@@ -122,7 +121,7 @@ class ScenarioDataset(Dataset):
         if (d.get("scenario") != sid or d.get("node_count") != self.n_nodes
                 or d.get("feature_names") != self.dynamic_feature_names
                 or t.get("scenario") != sid
-                or t.get("shape") != [self.n_nodes, 2]
+                or t.get("shape") != [self.n_nodes, 1]
                 or t.get("channels") != self.target_channels
                 or t.get("hour") != self.hour):
             raise ValueError(f"Scenario metadata mismatch: {sid}")
@@ -130,12 +129,11 @@ class ScenarioDataset(Dataset):
         with np.load(self.target_root / sid / TARGET_FILE, allow_pickle=False) as file:
             y, mask = file["y_delta"], file["valid_mask"]
         if (x.shape != (self.n_nodes, len(self.dynamic_feature_names))
-                or y.shape != (self.n_nodes, 2) or mask.shape != y.shape
+                or y.shape != (self.n_nodes, 1) or mask.shape != y.shape
                 or mask.dtype != np.bool_
                 or not np.isfinite(x).all() or not np.isfinite(y).all()):
             raise ValueError(f"Invalid tensors for {sid}")
         x_dynamic = torch.from_numpy(x.astype(np.float32, copy=False))
-        # The same function can be used at optimization time with no targets.
         input_mask = mask_from_inputs(
             self.fixed["x_static"], x_dynamic,
             self.static_feature_names, self.dynamic_feature_names,

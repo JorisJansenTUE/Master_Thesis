@@ -1,4 +1,4 @@
-"""Evaluate one-hour road / bus-specific link travel-time DELTAS with eligibility masks.
+"""Evaluate one-hour general-road link travel-time DELTAS with eligibility masks.
 
 Produces summary.json and scenario_metrics.csv as before. By default, also
 creates diagnostic PNG plots including train/validation MSE from history.csv.
@@ -18,7 +18,7 @@ from gnn_surrogate.dataset.dataset import ScenarioDataset, load_splits
 from gnn_surrogate.models.gnn_transformer import GNNTransformer
 from preprocessing.utils import PROJECT_ROOT
 
-CHANNELS = ("road", "bus_spec")
+CHANNELS = ("road",)
 # Zero, (0,1], (1,5], (5,20], (20,100], >100 seconds.
 MAGNITUDE_EDGES_S = np.array([0.0, 1.0, 5.0, 20.0, 100.0])
 MAGNITUDE_LABELS = ("0", "0–1", "1–5", "5–20", "20–100", ">100")
