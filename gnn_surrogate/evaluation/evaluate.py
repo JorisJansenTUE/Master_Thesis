@@ -1,8 +1,11 @@
-"""Evaluate one-hour general-road link travel-time DELTAS with eligibility masks.
+"""Evaluate the general-road congestion-delay surrogate in travel-time seconds.
 
-Produces summary.json and scenario_metrics.csv as before. By default, also
-creates diagnostic PNG plots including train/validation MSE from history.csv.
-Only links with valid_mask=True contribute to every reported error/plot.
+Targets contain congestion-delay CHANGES, but the main evaluation compares
+reconstructed TOTAL travel-time changes with MATSim. All statistics and plots
+exclude ineligible links. Two benchmarks are reported:
+  - no_change: total travel time remains at baseline (delta TT = 0)
+  - unchanged_delay: free-flow changes are known, delay stays at baseline
+The latter is the natural zero-output baseline for the delay surrogate.
 """
 from __future__ import annotations
 
@@ -15,257 +18,321 @@ import numpy as np
 import torch
 
 from gnn_surrogate.dataset.dataset import ScenarioDataset, load_splits
+from gnn_surrogate.evaluation.delay_reconstruction import reconstruct_road_travel_times
 from gnn_surrogate.models.gnn_transformer import GNNTransformer
 from preprocessing.utils import PROJECT_ROOT
 
-CHANNELS = ("road",)
-# Zero, (0,1], (1,5], (5,20], (20,100], >100 seconds.
+CHANNEL = "road"
 MAGNITUDE_EDGES_S = np.array([0.0, 1.0, 5.0, 20.0, 100.0])
 MAGNITUDE_LABELS = ("0", "0–1", "1–5", "5–20", "20–100", ">100")
+BASELINE_DELAY_EDGES_S = np.array([0.0, 5.0, 15.0, 60.0])
+BASELINE_DELAY_LABELS = ("≤0", "0–5", "5–15", "15–60", ">60")
 SCATTER_MAX_POINTS = 50_000
+TARGET_TYPE = "road_congestion_delay_change"
 
 
 def _empty_stats() -> dict:
-    return {"n": 0, "abs": 0.0, "sq": 0.0, "sq_zero": 0.0,
-            "sum": 0.0, "sum2": 0.0, "bias": 0.0}
+    return {"n": 0, "abs": 0.0, "sq": 0.0, "sq_no_change": 0.0,
+            "sq_unchanged_delay": 0.0, "sum_total": 0.0, "sum_total2": 0.0,
+            "sum_delay": 0.0, "sum_delay2": 0.0, "sum_absolute": 0.0,
+            "sum_absolute2": 0.0, "bias": 0.0, "below_ff": 0}
 
 
-def _plot_training_history(path: Path, out: Path, best_epoch: int, plt) -> bool:
+def _metrics(s: dict) -> dict:
+    n = s["n"]
+    if not n:
+        return {"count": 0, "mae_s": None, "rmse_s": None, "r2_delta": None,
+                "r2_delay_delta": None, "r2_absolute_tt": None,
+                "no_change_rmse_s": None, "unchanged_delay_rmse_s": None,
+                "mean_error_s": None, "predicted_below_freeflow": 0}
+
+    def r2(sum_y: float, sum_y2: float):
+        sst = sum_y2 - sum_y ** 2 / n
+        return 1.0 - s["sq"] / sst if sst > 1e-12 else None
+
+    return {
+        "count": n,
+        "mae_s": s["abs"] / n,
+        "rmse_s": np.sqrt(s["sq"] / n).item(),
+        "r2_delta": r2(s["sum_total"], s["sum_total2"]),
+        "r2_delay_delta": r2(s["sum_delay"], s["sum_delay2"]),
+        "r2_absolute_tt": r2(s["sum_absolute"], s["sum_absolute2"]),
+        "no_change_rmse_s": np.sqrt(s["sq_no_change"] / n).item(),
+        "unchanged_delay_rmse_s": np.sqrt(s["sq_unchanged_delay"] / n).item(),
+        "mean_error_s": s["bias"] / n,
+        "predicted_below_freeflow": s["below_ff"],
+    }
+
+
+def _plot_history(path: Path, out: Path, best_epoch: int, plt) -> None:
     if not path.is_file():
-        print(f"Training curve not generated: missing {path}", flush=True)
-        return False
-    with path.open(newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    if not rows or any(k not in rows[0] for k in ("epoch", "train_mse", "val_mse")):
-        print(f"Training curve not generated: invalid or empty {path}", flush=True)
-        return False
-    x = np.array([int(r["epoch"]) for r in rows], dtype=int)
-    train = np.array([float(r["train_mse"]) for r in rows], dtype=float)
-    val = np.array([float(r["val_mse"]) for r in rows], dtype=float)
+        print(f"No loss curve: {path} not found", flush=True)
+        return
+    with path.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    if not rows or not {"epoch", "train_mse", "val_mse"}.issubset(rows[0]):
+        print(f"No loss curve: {path} has no epoch/train_mse/val_mse columns", flush=True)
+        return
+    epoch = np.array([int(r["epoch"]) for r in rows])
+    train = np.array([float(r["train_mse"]) for r in rows])
+    val = np.array([float(r["val_mse"]) for r in rows])
     fig, ax = plt.subplots(figsize=(9, 5.1))
-    ax.plot(x, train, lw=2.0, label="Training masked MSE")
-    ax.plot(x, val, lw=2.0, label="Validation masked MSE")
-    if best_epoch in x:
-        ax.axvline(best_epoch, ls="--", lw=1.2, color="0.4",
-                   label=f"Best checkpoint (epoch {best_epoch})")
-    ax.set(xlabel="Training epoch", ylabel="Masked MSE (seconds²)",
+    ax.plot(epoch, train, lw=2, label="Training")
+    ax.plot(epoch, val, lw=2, label="Validation")
+    if best_epoch in epoch:
+        ax.axvline(best_epoch, ls="--", color="0.4", label=f"Best epoch {best_epoch}")
+    ax.set(xlabel="Epoch", ylabel="Masked MSE of Δ congestion delay (s²)",
            title="Training and validation loss")
     ax.grid(alpha=0.2)
     ax.legend()
     fig.tight_layout()
     fig.savefig(out / "loss_train_validation.png", dpi=180)
     plt.close(fig)
-    return True
 
 
-def _plot_scatter(channel: str, data: list[tuple[np.ndarray, np.ndarray]],
-                  out: Path, metrics: dict, plt) -> None:
-    if not data:
+def _plot_scatter(scatter: list, metrics: dict, out: Path, plt) -> None:
+    if not scatter:
         return
-    true = np.concatenate([p[0] for p in data])
-    pred = np.concatenate([p[1] for p in data])
-    if not true.size:
-        return
-    fig, ax = plt.subplots(figsize=(7.0, 6.3))
-    ax.scatter(true, pred, s=5, alpha=0.11, rasterized=True, linewidths=0)
-    lo = min(float(true.min()), float(pred.min()), 0.0)
-    hi = max(float(true.max()), float(pred.max()), 0.0)
+    actual = np.concatenate([a for a, _ in scatter])
+    pred = np.concatenate([b for _, b in scatter])
+    fig, ax = plt.subplots(figsize=(7.2, 6.4))
+    ax.scatter(actual, pred, s=5, alpha=0.12, linewidths=0, rasterized=True)
+    lo, hi = min(actual.min(), pred.min(), 0), max(actual.max(), pred.max(), 0)
     if hi <= lo:
-        lo, hi = lo - 1, hi + 1
-    ax.plot([lo, hi], [lo, hi], color="0.2", ls="--", lw=1.3,
-            label="Perfect prediction")
-    ax.axhline(0.0, color="0.6", lw=0.7)
-    ax.axvline(0.0, color="0.6", lw=0.7)
-    ax.set(xlabel="Actual travel-time change (s)",
-           ylabel="Predicted travel-time change (s)",
-           title=f"Predicted vs actual Δ travel time — {channel.replace('_', ' ')}")
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(lo, hi)
+        hi = lo + 1
+    ax.plot([lo, hi], [lo, hi], ls="--", color="0.2", label="Perfect prediction")
+    ax.axhline(0, color="0.6", lw=0.7)
+    ax.axvline(0, color="0.6", lw=0.7)
+    ax.set(xlabel="Actual total travel-time change (s)",
+           ylabel="Predicted total travel-time change (s)",
+           title="Road links — reconstructed total travel-time changes",
+           xlim=(lo, hi), ylim=(lo, hi))
     ax.set_aspect("equal", adjustable="box")
-    ax.text(0.03, 0.97,
-            f"Masked RMSE: {metrics['rmse_s']:.2f} s\nR²: {metrics['r2_delta']:.3f}" if metrics['r2_delta'] is not None
-            else f"Masked RMSE: {metrics['rmse_s']:.2f} s",
-            transform=ax.transAxes, va="top", ha="left",
+    details = f"RMSE: {metrics['rmse_s']:.2f} s"
+    if metrics["r2_delta"] is not None:
+        details += f"\nR²: {metrics['r2_delta']:.3f}"
+    ax.text(.03, .97, details, va="top", transform=ax.transAxes,
             bbox={"facecolor": "white", "alpha": 0.85, "edgecolor": "none"})
     ax.legend(loc="lower right")
     fig.tight_layout()
-    fig.savefig(out / f"scatter_{channel}.png", dpi=180)
+    fig.savefig(out / "scatter_road.png", dpi=180)
     plt.close(fig)
 
 
-def _plot_magnitude(channel: str, bins: dict, out: Path, plt) -> None:
-    count, sq, zero_sq = bins["n"], bins["sq"], bins["zero_sq"]
-    keep = count > 0
+def _plot_bins(bin_data: dict, labels: tuple[str, ...], name: str,
+               title: str, xlabel: str, out: Path, plt) -> None:
+    n = bin_data["n"]
+    keep = n > 0
     if not keep.any():
         return
-    model = np.full(count.shape, np.nan, dtype=float)
-    no_change = np.full(count.shape, np.nan, dtype=float)
-    model[keep] = np.sqrt(sq[keep] / count[keep])
-    no_change[keep] = np.sqrt(zero_sq[keep] / count[keep])
-    x = np.arange(len(count))
-    fig, ax = plt.subplots(figsize=(10, 5.3))
-    width = 0.37
-    ax.bar(x[keep] - width / 2, model[keep], width, label="GNN–Transformer")
-    ax.bar(x[keep] + width / 2, no_change[keep], width, label="No-change baseline")
-    ax.set_xticks(x, MAGNITUDE_LABELS)
-    ax.set(xlabel="Absolute actual travel-time change |ΔTT| (s)",
-           ylabel="RMSE of predicted ΔTT (s)",
-           title=f"Error by actual change magnitude — {channel.replace('_', ' ')}")
+    x = np.arange(len(labels))
+    series = [
+        ("GNN–Transformer", "sq"),
+        ("Unchanged congestion delay", "sq_unchanged_delay"),
+        ("No change in total travel time", "sq_no_change"),
+    ]
+    fig, ax = plt.subplots(figsize=(11.0, 5.4))
+    width = 0.25
+    for j, (label, key) in enumerate(series):
+        rmse = np.zeros(n.shape, dtype=float)
+        rmse[keep] = np.sqrt(bin_data[key][keep] / n[keep])
+        ax.bar(x[keep] + (j - 1) * width, rmse[keep], width, label=label)
+    ax.set_xticks(x, labels)
+    ax.set(xlabel=xlabel, ylabel="RMSE of total travel-time change (s)", title=title)
     ax.grid(axis="y", alpha=0.2)
     ax.set_axisbelow(True)
-    ax.legend()
-    # Counts are useful because bus-specific bins can be sparsely populated.
+    ax.legend(fontsize=9)
     for i in x[keep]:
-        height = max(model[i], no_change[i])
-        ax.annotate(f"n={count[i]:,}", (i, height), xytext=(0, 5),
-                    textcoords="offset points", ha="center", va="bottom", fontsize=8)
-    ax.margins(y=0.13)
+        height = max(np.sqrt(bin_data[key][i] / n[i]) for _, key in series)
+        ax.annotate(f"n={n[i]:,}", (i, height), xytext=(0, 5),
+                    textcoords="offset points", ha="center", fontsize=8)
+    ax.margins(y=.13)
     fig.tight_layout()
-    fig.savefig(out / f"rmse_by_change_{channel}.png", dpi=180)
+    fig.savefig(out / name, dpi=180)
     plt.close(fig)
 
 
-def _plot_scenarios(channel: str, scenario_rows: list[dict], out: Path, plt) -> None:
-    pairs = [(float(r[f"{channel}_rmse_s"]), float(r[f"{channel}_no_change_rmse_s"]))
-             for r in scenario_rows if r[f"{channel}_rmse_s"] is not None]
-    if not pairs:
+def _plot_scenarios(rows: list[dict], out: Path, plt) -> None:
+    valid = [r for r in rows if r["road_rmse_s"] is not None]
+    if not valid:
         return
-    arr = np.array(pairs, dtype=float)
-    # Sort by baseline RMSE to reveal whether the model improves on high-impact scenarios.
-    arr = arr[np.argsort(arr[:, 1])]
-    fig, ax = plt.subplots(figsize=(9, 5.1))
-    x = np.arange(1, len(arr) + 1)
-    ax.plot(x, arr[:, 0], lw=1.2, label="GNN–Transformer")
-    ax.plot(x, arr[:, 1], lw=1.2, label="No-change baseline")
-    ax.set(xlabel="Scenario (sorted by no-change RMSE)",
-           ylabel="RMSE of predicted ΔTT (s)",
-           title=f"Per-scenario RMSE — {channel.replace('_', ' ')}")
+    data = np.array([[r["road_rmse_s"], r["road_no_change_rmse_s"],
+                      r["road_unchanged_delay_rmse_s"]] for r in valid], dtype=float)
+    data = data[np.argsort(data[:, 1])]
+    fig, ax = plt.subplots(figsize=(9.2, 5.2))
+    x = np.arange(1, len(data) + 1)
+    ax.plot(x, data[:, 0], lw=1.1, label="GNN–Transformer")
+    ax.plot(x, data[:, 1], lw=1.1, label="No total TT change")
+    ax.plot(x, data[:, 2], lw=1.1, label="Unchanged congestion delay")
+    ax.set(xlabel="Scenario, sorted by no-total-change RMSE",
+           ylabel="RMSE of total travel-time change (s)",
+           title="Travel-time prediction error by scenario")
     ax.grid(alpha=0.2)
     ax.legend()
     fig.tight_layout()
-    fig.savefig(out / f"rmse_by_scenario_{channel}.png", dpi=180)
+    fig.savefig(out / "rmse_by_scenario_road.png", dpi=180)
     plt.close(fig)
 
 
-def _save_plots(out: Path, checkpoint: Path, best_epoch: int, scatter: dict,
-                bins: dict, rows: list[dict], results: dict, history: Path | None) -> None:
+def _save_plots(out: Path, checkpoint: Path, best_epoch: int, scatter: list,
+                magnitude: dict, congestion: dict, rows: list[dict], metrics: dict,
+                history: Path | None) -> None:
     import matplotlib
-    matplotlib.use("Agg")  # Safe in noninteractive SLURM jobs.
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    history_file = history or checkpoint.parent / "history.csv"
-    _plot_training_history(history_file, out, best_epoch, plt)
-    for ch in CHANNELS:
-        if results[ch]["count"]:
-            _plot_scatter(ch, scatter[ch], out, results[ch], plt)
-            _plot_magnitude(ch, bins[ch], out, plt)
-            _plot_scenarios(ch, rows, out, plt)
+    _plot_history(history or checkpoint.parent / "history.csv", out, best_epoch, plt)
+    if metrics["count"]:
+        _plot_scatter(scatter, metrics, out, plt)
+        _plot_bins(magnitude, MAGNITUDE_LABELS, "rmse_by_change_road.png",
+                   "Error by actual total travel-time change",
+                   "Absolute actual total travel-time change (s)", out, plt)
+        _plot_bins(congestion, BASELINE_DELAY_LABELS,
+                   "rmse_by_baseline_congestion_road.png",
+                   "Error by baseline congestion delay",
+                   "Baseline congestion delay (s)", out, plt)
+        _plot_scenarios(rows, out, plt)
 
 
-def evaluate(gnn_dir: Path, splits_file: Path, checkpoint: Path,
-             output: Path, split: str = "val", device_name: str = "cpu",
-             *, plots: bool = True, save_predictions: bool = False,
-             history: Path | None = None) -> dict:
-    # Safe rerun: overwrite our own summary/plot files, leave other files untouched.
+def evaluate(gnn_dir: Path, splits_file: Path, checkpoint: Path, output: Path,
+             split: str = "val", device_name: str = "cpu", *, plots: bool = True,
+             save_predictions: bool = False, history: Path | None = None) -> dict:
     output.mkdir(parents=True, exist_ok=True)
     ids = load_splits(splits_file)[split]
     data = ScenarioDataset(gnn_dir / "gnn_static", gnn_dir / "gnn_inputs",
                            gnn_dir / "dynamic", gnn_dir / "targets", ids)
+    # A travel-time-change dataset with the same shape would otherwise give
+    # misleading metrics; refuse to mix experiments.
+    for sid in ids:
+        meta = json.loads((gnn_dir / "targets" / sid / "target_metadata.json").read_text())
+        if meta.get("target_type") != TARGET_TYPE:
+            raise ValueError(f"{sid}: expected target_type={TARGET_TYPE}, found {meta.get('target_type')!r}")
+    with np.load(gnn_dir / "gnn_static" / "baseline_tt.npz", allow_pickle=False) as cache:
+        baseline_ff = cache["baseline_freeflow_s"]
+        if int(cache["hour"]) != data.hour:
+            raise ValueError("Baseline free-flow reference hour does not match dataset")
+    fixed = data.fixed
+    baseline_tt = fixed["baseline_tt_s"].numpy()
     device = torch.device("cuda" if device_name == "auto" and torch.cuda.is_available()
                           else "cpu" if device_name == "auto" else device_name)
-    fixed = {k: v.to(device) for k, v in data.fixed.items()}
+    fixed_device = {k: v.to(device) for k, v in fixed.items()}
     ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
-    if ckpt["static_feature_names"] != data.input_metadata["static_feature_names"]:
-        raise ValueError("Checkpoint static feature names differ")
-    if ckpt["target_channels"] != list(CHANNELS):
-        raise ValueError("Checkpoint travel-time targets differ")
+    if (ckpt["static_feature_names"] != data.static_feature_names
+            or ckpt["dynamic_feature_names"] != data.dynamic_feature_names
+            or ckpt["target_channels"] != data.target_channels):
+        raise ValueError("Checkpoint feature/output names do not match dataset")
     model = GNNTransformer(**ckpt["model_kwargs"]).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
 
-    stats = {c: _empty_stats() for c in CHANNELS}
-    bins = {c: {"n": np.zeros(6, dtype=np.int64),
-                "sq": np.zeros(6, dtype=np.float64),
-                "zero_sq": np.zeros(6, dtype=np.float64)} for c in CHANNELS}
-    scatter = {c: [] for c in CHANNELS}
-    rng = np.random.default_rng(42)  # Deterministic scatter-only subsampling.
-    scatter_per_scenario = max(1, SCATTER_MAX_POINTS // len(data))
+    stats = _empty_stats()
+    magnitudes = {k: np.zeros(6, dtype=np.float64 if k != "n" else np.int64)
+                  for k in ("n", "sq", "sq_no_change", "sq_unchanged_delay")}
+    congestion = {k: np.zeros(5, dtype=np.float64 if k != "n" else np.int64)
+                  for k in ("n", "sq", "sq_no_change", "sq_unchanged_delay")}
+    scatter = []
     rows = []
+    rng = np.random.default_rng(42)
+    max_scatter_scenario = max(1, SCATTER_MAX_POINTS // len(data))
     prediction_dir = output / "predictions"
     if save_predictions:
         prediction_dir.mkdir(exist_ok=True)
 
     with torch.inference_mode():
         for item in data:
-            x = item["x_dynamic"].to(device)
-            y = item["y_delta"].to(device)
-            valid = item["valid_mask"].to(device)
-            pred = model(fixed["x_static"], x, fixed["x_baseline"], fixed["edge_index"])
-            if pred.shape != y.shape or valid.shape != y.shape:
-                raise ValueError(f"Shape mismatch for {item['scenario_id']}")
-            row = {"scenario": item["scenario_id"]}
-            for idx, channel in enumerate(CHANNELS):
-                # Crucial: ALL metrics and plot data use ONLY valid_mask=True.
-                mask = valid[:, idx]
-                n = int(mask.sum())
-                row[f"{channel}_n"] = n
-                row[f"{channel}_rmse_s"] = None
-                row[f"{channel}_no_change_rmse_s"] = None
-                if not n:
-                    continue
-                truth = y[:, idx][mask].double().cpu().numpy()
-                predicted = pred[:, idx][mask].double().cpu().numpy()
-                error = predicted - truth
-                stat = stats[channel]
-                stat["n"] += n
-                stat["abs"] += float(np.abs(error).sum())
-                stat["sq"] += float(np.square(error).sum())
-                stat["sq_zero"] += float(np.square(truth).sum())
-                stat["sum"] += float(truth.sum())
-                stat["sum2"] += float(np.square(truth).sum())
-                stat["bias"] += float(error.sum())
-                row[f"{channel}_rmse_s"] = float(np.sqrt(np.mean(np.square(error))))
-                row[f"{channel}_no_change_rmse_s"] = float(np.sqrt(np.mean(np.square(truth))))
+            dynamic = item["x_dynamic"]
+            truth = item["y_delta"]
+            valid = item["valid_mask"].numpy()
+            pred = model(fixed_device["x_static"], dynamic.to(device),
+                         fixed_device["x_baseline"], fixed_device["edge_index"])
+            if pred.shape != truth.shape or truth.shape != valid.shape:
+                raise ValueError(f"Shape mismatch in {item['scenario_id']}")
+            reconstruction = reconstruct_road_travel_times(
+                baseline_tt, baseline_ff, dynamic.numpy(), data.dynamic_feature_names,
+                pred.cpu().numpy(), valid, actual_delay_delta_s=truth.numpy())
+            predicted = reconstruction["predicted_total_delta_s"][valid]
+            actual = reconstruction["actual_total_delta_s"][valid]
+            predicted_delay = pred.cpu().numpy()[valid].astype(np.float64)
+            actual_delay = truth.numpy()[valid].astype(np.float64)
+            ff_change = reconstruction["freeflow_change_s"][valid]
+            abs_tt = reconstruction["actual_tt_s"][valid]
+            predicted_tt = reconstruction["predicted_tt_s"][valid]
+            scenario_ff = reconstruction["scenario_freeflow_s"][valid]
+            n = actual.size
+            row = {"scenario": item["scenario_id"], "road_n": n,
+                   "road_rmse_s": None, "road_no_change_rmse_s": None,
+                   "road_unchanged_delay_rmse_s": None}
+            if n:
+                error = predicted - actual
+                sq = error ** 2
+                stats["n"] += n
+                stats["abs"] += float(np.abs(error).sum())
+                stats["sq"] += float(sq.sum())
+                stats["sq_no_change"] += float(np.square(actual).sum())
+                stats["sq_unchanged_delay"] += float(np.square(actual_delay).sum())
+                stats["sum_total"] += float(actual.sum())
+                stats["sum_total2"] += float(np.square(actual).sum())
+                stats["sum_delay"] += float(actual_delay.sum())
+                stats["sum_delay2"] += float(np.square(actual_delay).sum())
+                stats["sum_absolute"] += float(abs_tt.sum())
+                stats["sum_absolute2"] += float(np.square(abs_tt).sum())
+                stats["bias"] += float(error.sum())
+                below_ff = int(np.count_nonzero(predicted_tt < scenario_ff - 0.01))
+                stats["below_ff"] += below_ff
+                row.update({
+                    "road_rmse_s": float(np.sqrt(sq.mean())),
+                    "road_no_change_rmse_s": float(np.sqrt(np.square(actual).mean())),
+                    "road_unchanged_delay_rmse_s": float(np.sqrt(np.square(actual_delay).mean())),
+                    "road_mae_s": float(np.abs(error).mean()),
+                    "road_mean_error_s": float(error.mean()),
+                    "road_predicted_below_freeflow": below_ff,
+                })
                 if plots:
-                    mag_idx = np.searchsorted(MAGNITUDE_EDGES_S, np.abs(truth), side="left")
-                    b = bins[channel]
-                    b["n"] += np.bincount(mag_idx, minlength=6)
-                    b["sq"] += np.bincount(mag_idx, weights=np.square(error), minlength=6)
-                    b["zero_sq"] += np.bincount(mag_idx, weights=np.square(truth), minlength=6)
-                    # Scatter is a subset for visual legibility; metrics above use ALL valid links.
-                    choice = rng.choice(n, size=min(n, scatter_per_scenario), replace=False)
-                    scatter[channel].append((truth[choice], predicted[choice]))
+                    b = np.searchsorted(MAGNITUDE_EDGES_S, np.abs(actual), side="left")
+                    c = np.searchsorted(BASELINE_DELAY_EDGES_S,
+                                        np.maximum(0.0, baseline_tt[valid] - baseline_ff[valid]), side="left")
+                    for bucket, indices in ((magnitudes, b), (congestion, c)):
+                        bucket["n"] += np.bincount(indices, minlength=len(bucket["n"]))
+                        bucket["sq"] += np.bincount(indices, weights=sq, minlength=len(bucket["n"]))
+                        bucket["sq_no_change"] += np.bincount(indices, weights=np.square(actual),
+                                                               minlength=len(bucket["n"]))
+                        bucket["sq_unchanged_delay"] += np.bincount(indices, weights=np.square(actual_delay),
+                                                                     minlength=len(bucket["n"]))
+                    chosen = rng.choice(n, size=min(n, max_scatter_scenario), replace=False)
+                    scatter.append((actual[chosen], predicted[chosen]))
             if save_predictions:
                 np.savez_compressed(prediction_dir / f"{item['scenario_id']}.npz",
-                                    predicted_delta_s=pred.cpu().numpy().astype(np.float32),
-                                    actual_delta_s=y.cpu().numpy().astype(np.float32),
-                                    valid_mask=valid.cpu().numpy())
+                                    predicted_delay_change_s=pred.cpu().numpy().astype(np.float32),
+                                    actual_delay_change_s=truth.numpy().astype(np.float32),
+                                    freeflow_change_s=reconstruction["freeflow_change_s"].astype(np.float32),
+                                    predicted_total_tt_change_s=reconstruction["predicted_total_delta_s"].astype(np.float32),
+                                    actual_total_tt_change_s=reconstruction["actual_total_delta_s"].astype(np.float32),
+                                    predicted_tt_s=reconstruction["predicted_tt_s"].astype(np.float32),
+                                    actual_tt_s=reconstruction["actual_tt_s"].astype(np.float32),
+                                    valid_mask=valid)
             rows.append(row)
-
-    results = {}
-    for channel, s in stats.items():
-        n = s["n"]
-        sst = s["sum2"] - s["sum"] ** 2 / n if n else 0
-        results[channel] = {
-            "count": n,
-            "mae_s": s["abs"] / n if n else None,
-            "rmse_s": (s["sq"] / n) ** 0.5 if n else None,
-            "no_change_rmse_s": (s["sq_zero"] / n) ** 0.5 if n else None,
-            "r2_delta": 1 - s["sq"] / sst if sst > 0 else None,
-            "mean_error_s": s["bias"] / n if n else None,
-        }
-    summary = {"split": split, "scenarios": len(data),
-               "hour": data.hour, "best_epoch": int(ckpt["epoch"]),
-               "metrics": results,
-               "units": "seconds (signed link travel-time changes)"}
-    (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-    with (output / "scenario_metrics.csv").open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+    result = _metrics(stats)
+    summary = {
+        "split": split,
+        "scenarios": len(data),
+        "hour": data.hour,
+        "best_epoch": int(ckpt["epoch"]),
+        "target_type": TARGET_TYPE,
+        "metrics": {CHANNEL: result},
+        "units": "seconds; main metrics use reconstructed TOTAL travel-time changes",
+        "benchmarks": {
+            "no_change": "T_scenario_pred = T_baseline",
+            "unchanged_delay": "T_scenario_pred = T_baseline + (FF_scenario - FF_baseline)",
+        },
+    }
+    (output / "summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n")
+    with (output / "scenario_metrics.csv").open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
     if plots:
         _save_plots(output, checkpoint, int(ckpt["epoch"]), scatter,
-                    bins, rows, results, history)
+                    magnitudes, congestion, rows, result, history)
     print(json.dumps(summary, indent=2), flush=True)
     return summary
 
@@ -280,8 +347,7 @@ def main() -> None:
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="cpu")
     parser.add_argument("--no-plots", action="store_true")
     parser.add_argument("--save-predictions", action="store_true")
-    parser.add_argument("--history", type=Path, default=None,
-                        help="Training history.csv (default: beside best.pt)")
+    parser.add_argument("--history", type=Path, default=None)
     args = parser.parse_args()
     evaluate(args.gnn_dir, args.splits or args.gnn_dir / "splits.json",
              args.checkpoint, args.out, args.split, args.device,
