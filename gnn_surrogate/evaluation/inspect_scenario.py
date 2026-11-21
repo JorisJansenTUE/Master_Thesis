@@ -23,7 +23,7 @@ from preprocessing.utils import PROJECT_ROOT
 # ---------------------------- LOCAL SETTINGS -------------------------------
 
 GNN_DIR = Path("/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt")
-SIMULATIONS_DIR = PROJECT_ROOT / "locarno_ETH_Model" / "training_dataset_v4"
+SIMULATIONS_DIR = Path("/vast.mnt/home/20201733/locarno_ETH_Model/training_dataset_v4")
 RUN_TAG = "tt_001"
 SCENARIO_ID = "corridor_00828"
 BASELINE_ID = "baseline_00000"
