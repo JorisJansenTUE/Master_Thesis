@@ -1,4 +1,4 @@
-"""Build masked general-road travel-time changes for the selected hour."""
+"""Build masked general-road congestion-delay changes for the selected hour."""
 from __future__ import annotations
 
 import argparse
@@ -25,12 +25,15 @@ def main() -> None:
         if int(fixed["hour"]) != args.hour:
             raise ValueError("Target hour differs from gnn_static baseline hour")
         baseline_tt, baseline_present = fixed["baseline_tt_s"], fixed["present_mask"]
+        baseline_freeflow = fixed["baseline_freeflow_s"]
     delta, valid, report = build_delta_targets(
-        nodes, args.scenario, baseline_tt, baseline_present, hour=args.hour)
+        nodes, args.scenario, baseline_tt, baseline_present,
+        baseline_freeflow, hour=args.hour)
     args.out.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(args.out / "target_delta.npz", y_delta=delta, valid_mask=valid)
     metadata = {"scenario": args.scenario.name, "shape": list(delta.shape),
-                "channels": list(CHANNELS), "hour": args.hour, "units": "seconds", **report}
+                "channels": list(CHANNELS), "hour": args.hour, "units": "seconds",
+                "target_type": "road_congestion_delay_change", **report}
     (args.out / "target_metadata.json").write_text(
         json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     print(f"{args.scenario.name}: y_delta={delta.shape}, valid={int(valid.sum())}, "

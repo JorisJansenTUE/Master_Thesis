@@ -44,9 +44,11 @@ def main() -> None:
     baseline_path = args.baseline_scenario / "targets" / "output_detailed_link_statistics.csv.gz"
     # Build baseline travel-time references once, alongside the fixed graph.
     # Only general-road travel time is predicted; existing bus _spec links are not targets.
-    tt, present = build_baseline_travel_times(nodes, args.baseline_scenario, args.hour)
+    tt, present, freeflow = build_baseline_travel_times(
+        nodes, args.baseline_scenario, args.hour)
     np.savez_compressed(args.graph / "baseline_tt.npz",
                         baseline_tt_s=tt, present_mask=present,
+                        baseline_freeflow_s=freeflow,
                         hour=np.asarray(args.hour, dtype=np.int16))
     # Feed only the road travel time as one additional static feature.
     nodes["baseline_road_tt_s"] = tt[:, 0]
