@@ -120,8 +120,9 @@ class LinkTravelTimes:
                     else:
                         travel_times[link_id] = tt
 
-                # Free-flow time and volume are auxiliary diagnostics only.
-                # Never use them to silently replace an invalid observed time.
+                # Free-flow time is an explicit routing input for *_spec links.
+                # For ordinary links, it is diagnostic only and must not be
+                # used to silently replace an invalid observed travel time.
                 length = _finite_float(row.get("LENGTH"))
                 speed = _finite_float(row.get("FREESPEED"))
                 if length is not None and length > 0 and speed is not None and speed > 0:

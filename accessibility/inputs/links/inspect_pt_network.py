@@ -53,7 +53,7 @@ def main() -> None:
     )
     rt_end = perf_counter()
     print("=" * 70)
-    print("PT accessibility network — absolute linkstats for bus")
+    print("PT accessibility network — bus linkstats (special links at free flow)")
     print("=" * 70)
     print(f"Schedule:                {SCHEDULE_FILE}")
     print(f"Linkstats:               {LINKSTATS_FILE}")
@@ -66,6 +66,7 @@ def main() -> None:
     print(f"Schedule transfer pairs: {report.scheduled_transfer_relations:,}")
     print(f"Weak components:         {len(weak)}; largest {max(weak):,}")
     print(f"Unique bus links used:   {report.bus_link_references:,}")
+    print(f"Special bus links at FF: {report.spec_links_using_free_flow:,}")
     print(f"Artificial zero TT links:{len(report.zero_time_artificial_pt_links):,} "
           f"{report.zero_time_artificial_pt_links}")
     print(f"Same-link stop segments: {report.same_link_bus_segments:,}")
@@ -74,14 +75,14 @@ def main() -> None:
     print(f"Worst bus/schedule ratio:{report.max_bus_to_schedule_ratio:.2f}x")
     print(f"Bus segment median TT:   {median(bus_times):.2f} s")
     print(f"PT 30-min Dijkstra:      {len(reached):,} states / {rt_end-rt_start:.4f} s")
-    print("\nEight longest bus segments (actual linkstats vs schedule seconds):")
+    print("\nEight longest bus segments (adjusted bus cost vs schedule seconds):")
     for observed, scheduled, u, v in slowest_bus:
         print(f"  {observed:8.1f} / {scheduled:6.1f}  {u[:2]}  {u[2]} -> {v[2]}")
     print("\nTiming:")
     print(f"  Inputs: {read_done-begin:.3f} s; PT graph: {graph_done-read_done:.3f} s")
-    print("\nLimitations: ignores frequencies/departures; absolute bus linkstats may")
-    print("include stop/holding behaviour. Zero-time artificial links and same-link")
-    print("segments are left at zero and highlighted, never replaced by schedules.")
+    print("\nLimitations: ignores frequencies/departures; ordinary bus linkstats may")
+    print("include stop/holding behaviour; *_spec links use free flow. Artificial")
+    print("pt_* links with explicit zero and same-link segments remain at zero.")
     print("Walking access/egress is not yet implemented (future Step 4).")
 
 

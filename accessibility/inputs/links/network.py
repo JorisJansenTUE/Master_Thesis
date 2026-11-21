@@ -3,8 +3,9 @@
 - CarNetwork: directed MATSim car links weighted by experienced linkstats.
 - BikeNetwork: directed bike links weighted by explicitly configured cycling
   time and the exact supplied eQasim infrastructure VTT multiplier.
-- PTNetwork: route-state transit graph from schedule.py, with absolute
-  linkstats times on bus routes and scheduled times for other PT modes.
+- PTNetwork: route-state transit graph from schedule.py, with experienced
+  linkstats times on ordinary bus links, free-flow times on *_spec bus links,
+  and scheduled times for other PT modes.
 
 All network representations use NetworkX. XML reading uses the Python standard
 library, not network_sampling or matsim-tools. Routing/STATENT aggregation will
@@ -31,7 +32,20 @@ MissingTimePolicy = Literal["error", "free_flow"]
 
 class TravelTimeSource(Protocol):
     travel_times_s: dict[str, float]
+    free_flow_times_s: dict[str, float]
     invalid_travel_times: dict[str, object]
+
+
+def _spec_free_flow_time(link_id: str, times: TravelTimeSource) -> float:
+    """Use linkstats LENGTH / FREESPEED for *_spec links, never observed TT."""
+    value = times.free_flow_times_s.get(link_id)
+    if value is None or not math.isfinite(value) or value <= 0:
+        raise ValueError(
+            f"Special link {link_id!r} has no valid free-flow time in linkstats "
+            "(expected positive LENGTH and FREESPEED). "
+            "Check that the scenario linkstats match its network and schedule."
+        )
+    return float(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +229,17 @@ class CarNetwork(ModeNetwork):
         missing: list[str] = []
         invalid: list[str] = []
         matched = fallback = 0
+        # *_spec links are bus-special links. They must not be car-routable.
+        car_spec_links = [
+            str(lid) for _, _, lid in graph.edges(keys=True)
+            if str(lid).endswith("_spec")
+        ]
+        if car_spec_links:
+            raise ValueError(
+                "Bus-special *_spec links incorrectly permit car mode: "
+                f"{car_spec_links[:8]}"
+            )
+
         for _, _, lid, data in graph.edges(keys=True, data=True):
             tt = travel_times.travel_times_s.get(str(lid))
             if tt is not None and math.isfinite(tt) and tt > 0:
@@ -332,6 +357,7 @@ class PTNetworkReport:
     bus_segments_slower_than_schedule: int
     max_bus_to_schedule_ratio: float
     ride_edges_by_mode: dict[str, int]
+    spec_links_using_free_flow: int = 0
 
 
 @dataclass(slots=True)
@@ -370,6 +396,11 @@ class PTNetwork:
         max_ratio = 0.0
 
         def link_time(lid: str) -> float:
+            # *_spec bus lanes can contain large stop/holding delays in
+            # linkstats. The surrogate does not predict these links, so use
+            # the same fixed free-flow time from linkstats LENGTH/FREESPEED.
+            if lid.endswith("_spec"):
+                return _spec_free_flow_time(lid, travel_times)
             if lid in travel_times.travel_times_s:
                 value = travel_times.travel_times_s[lid]
                 if math.isfinite(value) and value > 0:
@@ -476,6 +507,9 @@ class PTNetwork:
             bus_segments_slower_than_schedule=bus_slower,
             max_bus_to_schedule_ratio=max_ratio,
             ride_edges_by_mode=dict(counts),
+            spec_links_using_free_flow=sum(
+                lid.endswith("_spec") for lid in bus_links_used
+            ),
         )
         return cls(graph, report, {k: tuple(v) for k, v in by_stop.items()})
 
