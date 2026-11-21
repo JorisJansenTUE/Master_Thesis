@@ -17,14 +17,9 @@ from time import perf_counter
 
 import pandas as pd
 
-from accessibility.inputs.grid.snapping import ScenarioRoadSnapper
 from accessibility.inputs.grid import destination_settings as dest
-from accessibility.inputs.links.linkstats import LinkTravelTimes
-from accessibility.inputs.links.network import PTNetwork, load_road_networks
-from accessibility.inputs.links.schedule import TransitSchedule
-from accessibility.routing.road import RoadRouter
-from accessibility.routing.pt import PTRouter
 from accessibility.calculations.cumulative import CumulativeAccessibility
+from accessibility.calculations.evaluate import calculate_accessibility
 from accessibility.calculations.sufficiency import SufficiencyReference, assess_sufficiency
 from accessibility.calculations.plots import (
     create_hexagon_geopackage, plot_accessibility_maps, plot_sufficiency_bars,
@@ -60,36 +55,17 @@ def main() -> None:
         raise ValueError("MAP_THRESHOLD_MIN must be one of THRESHOLDS_MIN")
     origins = pd.read_csv(SPATIAL_DIR / "origins.csv", dtype={"hex_id": str})
     jobs = pd.read_csv(SPATIAL_DIR / "jobs.csv", dtype={"job_id": str})
-    origin_ids = origins["hex_id"].astype(str).tolist()
-
-    linkstats = LinkTravelTimes.from_linkstats(
-        LINKSTATS_FILE, hour_start=HOUR_START, statistic=LINKSTATS_STATISTIC,
-    )
-    car, bike = load_road_networks(NETWORK_FILE, linkstats, bike_speed_m_s=BIKE_SPEED_M_S)
-    snapper = ScenarioRoadSnapper(origins, jobs,
-                                  max_origin_distance_m=ORIGIN_SNAP_M,
-                                  max_job_distance_m=JOB_SNAP_M)
-    car_att = snapper.attach(car.graph)
-    bike_att = snapper.attach(bike.graph)
-    car_router = RoadRouter(car.graph, car_att.origins.connectors, car_att.jobs.connectors, jobs)
-    bike_router = RoadRouter(bike.graph, bike_att.origins.connectors, bike_att.jobs.connectors, jobs)
-
-    schedule = TransitSchedule.from_matsim_schedule(SCHEDULE_FILE)
-    pt_network = PTNetwork.from_schedule(schedule, linkstats,
-                                         transfer_penalty_s=PT_TRANSFER_PENALTY_S)
-    pt_origin = pd.read_csv(SPATIAL_DIR / "pt_origin_connectors.csv",
-                            dtype={"point_id": str, "stop_id": str})
-    pt_jobs = pd.read_csv(SPATIAL_DIR / "pt_job_connectors.csv",
-                          dtype={"point_id": str, "stop_id": str})
-    pt_router = PTRouter(pt_network, pt_origin, pt_jobs, jobs)
-    t1 = perf_counter()
-
     cumulative = CumulativeAccessibility(THRESHOLDS_MIN)
-    results = pd.concat([
-        cumulative.run(car_router, origin_ids, mode="car"),
-        cumulative.run(bike_router, origin_ids, mode="bike"),
-        cumulative.run(pt_router, origin_ids, mode="pt"),
-    ], ignore_index=True)
+    results = calculate_accessibility(
+        RUN_DIR, SPATIAL_DIR,
+        thresholds_min=THRESHOLDS_MIN,
+        hour_start=HOUR_START,
+        linkstats_statistic=LINKSTATS_STATISTIC,
+        bike_speed_m_s=BIKE_SPEED_M_S,
+        pt_transfer_penalty_s=PT_TRANSFER_PENALTY_S,
+        origin_snap_m=ORIGIN_SNAP_M,
+        job_snap_m=JOB_SNAP_M,
+    )
     t2 = perf_counter()
 
     if RUN_DIR.name == BASELINE_RUN_NAME:
@@ -138,7 +114,7 @@ def main() -> None:
     print(summary[["mode", "time_min", "n_attached", "pct_sufficient_low",
                    "pct_sufficient_high", "mean_shortfall_low", "mean_shortfall_high"]]
           .round(3).to_string(index=False))
-    print(f"\nPreparation: {t1-t0:.3f}s; routing+aggregation: {t2-t1:.3f}s; "
+    print(f"\nLoading+routing+aggregation: {t2-t0:.3f}s; "
           f"saving+plots: {t3-t2:.3f}s")
     print(f"Results: {OUTPUT_DIR}")
     print("Caution: origin means/shares are unweighted by residents; unattached "
