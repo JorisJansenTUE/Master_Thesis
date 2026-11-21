@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=48G
 #SBATCH --time=06:00:00
-#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_prep_%j.out
-#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_prep_%j.err
+#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis_delay/slurm_logs/gnn_prep_%j.out
+#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis_delay/slurm_logs/gnn_prep_%j.err
 set -Eeuo pipefail
 
 PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis
