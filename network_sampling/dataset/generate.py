@@ -240,6 +240,46 @@ def _dataset_manifest(out: Path, network_path: Path, schedule_path: Path, settin
     return identity
 
 
+def write_intervention_scenario_files(
+    stage: Path,
+    *,
+    base: Baseline,
+    schedule: Path,
+    interventions: list,
+    budget_m: float,
+) -> tuple[list[dict], float, int, dict]:
+    """Write one explicitly selected intervention list using the dataset pipeline.
+
+    Shared by the original sampler and GA. The caller owns the staging directory,
+    scenario metadata and atomic publication. This function does not sample.
+    """
+    records = _serialized_interventions(interventions, base.index)
+    used_m = sum(row["length_m"] for row in records)
+    if used_m > budget_m + 1e-6:
+        raise ValueError(f"Scenario exceeds budget: {used_m:.3f}m > {budget_m:.3f}m")
+
+    network_file = stage / "network.xml.gz"
+    schedule_file = stage / "transit_schedule.xml.gz"
+    network_file.unlink(missing_ok=True)
+    schedule_file.unlink(missing_ok=True)
+    apply_matsim_scenario(base.network, schedule, base.index, interventions,
+                          network_file, schedule_file)
+    if not network_file.is_file() or not schedule_file.is_file():
+        raise RuntimeError("MATSim network or transit schedule was not written")
+
+    modified = load_matsim_network(network_file)
+    connectivity = check_connectivity(base.network, modified)
+    if not connectivity or not all(connectivity.values()):
+        raise ValueError(f"Final connectivity check failed: {connectivity}")
+
+    n_mapped = write_link_mapping(stage / "link_mapping.csv.gz", base.index,
+                                  base.network, modified)
+    (stage / "interventions.json").write_text(
+        json.dumps(records, indent=2) + "\n", encoding="utf-8"
+    )
+    return records, used_m, n_mapped, connectivity
+
+
 def generate_one(strategy: str, seed: int, out: Path, schedule: Path,
                  base: Baseline, identity: dict, max_attempts: int) -> None:
     scenario_id = f"{strategy}_{seed:05d}"
@@ -260,8 +300,6 @@ def generate_one(strategy: str, seed: int, out: Path, schedule: Path,
 
     with tempfile.TemporaryDirectory(prefix=f".{scenario_id}_", dir=out) as temp:
         stage = Path(temp)
-        network_file = stage / "network.xml.gz"
-        schedule_file = stage / "transit_schedule.xml.gz"
         reason = "No valid intervention sample"
         for attempt in range(1 if strategy == "baseline" else max_attempts):
             actual_seed = seed + attempt * 1_000_003
@@ -269,37 +307,20 @@ def generate_one(strategy: str, seed: int, out: Path, schedule: Path,
             if strategy != "baseline" and not interventions:
                 reason = "Sampler returned no interventions"
                 continue
-            records = _serialized_interventions(interventions, base.index)
-            used_m = sum(row["length_m"] for row in records)
-            if used_m > settings["budget_m"] + 1e-6:
-                raise RuntimeError(f"Sampler exceeded budget in {scenario_id}: {used_m:.3f}m")
-
-            network_file.unlink(missing_ok=True)
-            schedule_file.unlink(missing_ok=True)
             try:
-                apply_matsim_scenario(base.network, schedule, base.index, interventions,
-                                      network_file, schedule_file)
+                records, used_m, n_mapped, connectivity = write_intervention_scenario_files(
+                    stage, base=base, schedule=schedule, interventions=interventions,
+                    budget_m=settings["budget_m"],
+                )
             except ValueError as exc:
-                if not str(exc).startswith("Interventions disconnect the following modes:"):
+                # The same connectivity checks as the original sampler path.
+                if not (str(exc).startswith("Interventions disconnect the following modes:")
+                        or str(exc).startswith("Final connectivity check failed:")):
                     raise
                 reason = str(exc)
                 print(f"REJECT {scenario_id} attempt={attempt + 1}: {reason}", flush=True)
                 continue
 
-            if not network_file.is_file() or not schedule_file.is_file():
-                raise RuntimeError(f"MATSim network or schedule missing for {scenario_id}")
-            modified = load_matsim_network(network_file)
-            connectivity = check_connectivity(base.network, modified)
-            if not connectivity or not all(connectivity.values()):
-                reason = f"Final connectivity check failed: {connectivity}"
-                print(f"REJECT {scenario_id} attempt={attempt + 1}: {reason}", flush=True)
-                continue
-            # No train-time graph features or target arrays are written here.
-            n_mapped = write_link_mapping(stage / "link_mapping.csv.gz", base.index,
-                                          base.network, modified)
-            (stage / "interventions.json").write_text(
-                json.dumps(records, indent=2) + "\n", encoding="utf-8"
-            )
             metadata = {
                 "schema_version": SCHEMA_VERSION,
                 "id": scenario_id, "strategy": strategy, "seed": seed,
