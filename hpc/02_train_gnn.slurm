@@ -4,24 +4,21 @@
 #SBATCH --gpus=1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16G
 #SBATCH --gpus=1
-#SBATCH --time=24:00:00
+#SBATCH --time=18:00:00
 #SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_train_%j.out
 #SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_train_%j.err
 set -Eeuo pipefail
 
 PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis
-GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt}"
+GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt_road}"
 VENV="${VENV:-$PROJECT_ROOT/.venv-gnn}"
-EPOCHS="${EPOCHS:-100}"
+EPOCHS="${EPOCHS:-150}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
-RUN_TAG="${RUN_TAG:-tt_001}"
+RUN_TAG="${RUN_TAG:-tt_road_001}"
 RUN_DIR="$GNN_DATA/runs/$RUN_TAG"
-# Optional: absolute path to a previous run's last.pt. The output RUN_TAG
-# must be new; EPOCHS is the cumulative count (e.g., 100 resumes 51..100).
-RESUME_FROM="${RESUME_FROM:-}"
 
 module purge
 module load Umbrella/2024
@@ -52,13 +49,7 @@ if p.total_memory < 20 * 2**30:
 PY
 nvidia-smi || true
 
-EXTRA_ARGS=()
-if [[ -n "$RESUME_FROM" ]]; then
-    [[ -f "$RESUME_FROM" ]] || { echo "Missing checkpoint: $RESUME_FROM" >&2; exit 1; }
-    EXTRA_ARGS+=(--resume-from "$RESUME_FROM")
-fi
-
-echo "$(date -Is) Training on full graph; run=$RUN_TAG epochs=$EPOCHS batch=$BATCH_SIZE resume=${RESUME_FROM:-none}"
+echo "$(date -Is) Training on full graph; run=$RUN_TAG epochs=$EPOCHS batch=$BATCH_SIZE"
 srun python -u -m gnn_surrogate.training.train \
     --gnn-dir "$GNN_DATA" \
     --splits "$GNN_DATA/splits.json" \
@@ -68,7 +59,6 @@ srun python -u -m gnn_surrogate.training.train \
     --epochs "$EPOCHS" \
     --batch-size "$BATCH_SIZE" \
     --lr 0.0001 \
-    --patience 10 \
-    "${EXTRA_ARGS[@]}"
+    --patience 15
 
 echo "$(date -Is) Finished: $RUN_DIR/summary.json"

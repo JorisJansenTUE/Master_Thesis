@@ -11,9 +11,9 @@
 set -Eeuo pipefail
 
 PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis
-GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt}"
+GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt_road}"
 VENV="${VENV:-$PROJECT_ROOT/.venv-gnn}"
-RUN_TAG="${RUN_TAG:-tt_001}"
+RUN_TAG="${RUN_TAG:-tt_road_001}"
 EVAL_SPLIT="${EVAL_SPLIT:-val}"     # val, test, train
 CHECKPOINT="${CHECKPOINT:-$GNN_DATA/runs/$RUN_TAG/best.pt}"
 OUTPUT="${OUTPUT:-$GNN_DATA/runs/$RUN_TAG/evaluation_$EVAL_SPLIT}"
