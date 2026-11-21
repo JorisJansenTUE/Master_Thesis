@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH --job-name=locarno-gnn-train
+#SBATCH --job-name=locarno-gnn-train-delay
 #SBATCH --partition=tue.gpu2.q,tue.gpu3.q
 #SBATCH --gpus=1
 #SBATCH --nodes=1
@@ -13,11 +13,11 @@
 set -Eeuo pipefail
 
 PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis
-GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt_road}"
+GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt_delay}"
 VENV="${VENV:-$PROJECT_ROOT/.venv-gnn}"
 EPOCHS="${EPOCHS:-150}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
-RUN_TAG="${RUN_TAG:-tt_road_001}"
+RUN_TAG="${RUN_TAG:-tt_delay_001}"
 RUN_DIR="$GNN_DATA/runs/$RUN_TAG"
 
 module purge
