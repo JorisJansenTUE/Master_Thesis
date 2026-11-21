@@ -15,7 +15,8 @@ from matplotlib.cm import ScalarMappable
 from .cumulative import CumulativeAccessibility
 
 
-def plot_sufficiency_bars(summary: pd.DataFrame, output_dir: str | Path) -> None:
+def plot_sufficiency_bars(summary: pd.DataFrame, output_dir: str | Path,
+                          *, opportunity_label: str = "STATENT jobs") -> None:
     """One chart per mode; percentage of attached origins above low/high levels."""
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -30,7 +31,7 @@ def plot_sufficiency_bars(summary: pd.DataFrame, output_dir: str | Path) -> None
         ax.set_xticks(ticks, [f"{t:g} min" for t in group["time_min"]])
         ax.set_ylim(0, 105)
         ax.set_ylabel("Attached origins meeting sufficiency (%)")
-        ax.set_title(f"Job accessibility sufficiency — {mode.upper()}")
+        ax.set_title(f"{opportunity_label} accessibility sufficiency — {mode.upper()}")
         ax.grid(axis="y", alpha=0.2)
         ax.set_axisbelow(True)
         ax.legend(loc="upper left", fontsize=9)
@@ -66,8 +67,9 @@ def create_hexagon_geopackage(origins_gpkg: str | Path, scored: pd.DataFrame,
 
 def plot_accessibility_maps(hexagons: gpd.GeoDataFrame,
                             modes: tuple[str, ...], travel_time_min: float,
-                            output_dir: str | Path) -> None:
-    """Map absolute accessible jobs at one time cutoff; comparable colour scale."""
+                            output_dir: str | Path,
+                            *, opportunity_label: str = "STATENT jobs") -> None:
+    """Map absolute accessible opportunities at one time cutoff."""
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     col = CumulativeAccessibility.column_name(travel_time_min)
@@ -84,12 +86,12 @@ def plot_accessibility_maps(hexagons: gpd.GeoDataFrame,
         hexagons.plot(column=value_col, ax=ax, cmap="viridis", vmin=0, vmax=vmax,
                       linewidth=0.08, edgecolor="#555555",
                       missing_kwds={"color": "#e3e3e3", "label": "Not attached"})
-        ax.set_title(f"Accessible jobs within {travel_time_min:g} min — {mode.upper()}")
+        ax.set_title(f"Accessible {opportunity_label} within {travel_time_min:g} min — {mode.upper()}")
         ax.set_axis_off()
         scalar = ScalarMappable(norm=Normalize(vmin=0, vmax=vmax), cmap="viridis")
         scalar.set_array([])
         fig.colorbar(scalar, ax=ax, fraction=0.035, pad=0.02,
-                     label="Reachable STATENT jobs (same scale for all modes)")
+                     label=f"Reachable {opportunity_label} (same scale for all modes)")
         fig.tight_layout()
         fig.savefig(output / f"accessibility_map_{mode}_{travel_time_min:g}min.png", dpi=180)
         plt.close(fig)

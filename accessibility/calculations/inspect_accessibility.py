@@ -1,4 +1,4 @@
-"""Cumulative employment accessibility + baseline-referenced sufficiency.
+"""Cumulative opportunity accessibility + baseline-referenced sufficiency.
 
 Run from the project root:
     python -m accessibility.calculations.inspect_accessibility
@@ -18,6 +18,7 @@ from time import perf_counter
 import pandas as pd
 
 from accessibility.inputs.grid.snapping import ScenarioRoadSnapper
+from accessibility.inputs.grid import destination_settings as dest
 from accessibility.inputs.links.linkstats import LinkTravelTimes
 from accessibility.inputs.links.network import PTNetwork, load_road_networks
 from accessibility.inputs.links.schedule import TransitSchedule
@@ -33,15 +34,14 @@ from accessibility.calculations.plots import (
 # ------ Edit settings here (no CLI flags) ------
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RUN_DIR = PROJECT_ROOT / "data" / "Simulated_Runs_v2" / "baseline_00000"
-SPATIAL_DIR = PROJECT_ROOT / "data" / "accessibility"  /"spatial_baseline"
-OUTPUT_DIR = PROJECT_ROOT / "data" /"accessibility" / "outputs" / f"results_{RUN_DIR.name}"
+SPATIAL_DIR = dest.spatial_dir()
+OUTPUT_DIR = dest.results_dir(RUN_DIR.name)
 
 NETWORK_FILE = RUN_DIR / "network.xml.gz"
 SCHEDULE_FILE = RUN_DIR / "transit_schedule.xml.gz"
 LINKSTATS_FILE = RUN_DIR / "targets" / "linkstats.txt.gz"
 BASELINE_RUN_NAME = "baseline_00000"
-REFERENCE_FILE = (PROJECT_ROOT / "data" / "accessibility" / "outputs"
-                  / f"results_{BASELINE_RUN_NAME}" / "sufficiency_reference.json")
+REFERENCE_FILE = dest.baseline_reference_file(BASELINE_RUN_NAME)
 
 THRESHOLDS_MIN = (15.0, 20.0, 30.0)
 MAP_THRESHOLD_MIN = 15.0
@@ -113,24 +113,25 @@ def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     scored.to_csv(OUTPUT_DIR / "accessibility_by_hexagon.csv", index=False)
     summary.to_csv(OUTPUT_DIR / "sufficiency_summary.csv", index=False)
-    plot_sufficiency_bars(summary, OUTPUT_DIR)
+    plot_sufficiency_bars(summary, OUTPUT_DIR, opportunity_label=dest.opportunity_label())
     hexagons = create_hexagon_geopackage(
         SPATIAL_DIR / "origins.gpkg", scored,
         OUTPUT_DIR / "accessibility_hexagons.gpkg",
     )
     plot_accessibility_maps(hexagons, ("car", "bike", "pt"),
-                            MAP_THRESHOLD_MIN, OUTPUT_DIR)
+                            MAP_THRESHOLD_MIN, OUTPUT_DIR, opportunity_label=dest.opportunity_label())
     t3 = perf_counter()
 
     print("=" * 70)
-    print("Accessibility — cumulative STATENT jobs and sufficiency")
+    print(f"Accessibility — cumulative {dest.opportunity_label()} and sufficiency")
     print("=" * 70)
     print(f"Scenario: {RUN_DIR.name};  linkstats: {LINKSTATS_FILE}")
-    print(f"Origins: {len(origins):,}; employment cells: {len(jobs):,}")
+    print(f"Origins: {len(origins):,}; destinations: {len(jobs):,}; "
+          f"total opportunities: {jobs.jobs.sum():,.0f}")
     print(f"Travel-time cutoffs: {cumulative.thresholds_min} min")
     for threshold in cumulative.thresholds_min:
         column = cumulative.column_name(threshold)
-        print(f"  {threshold:g} min: baseline car mean = {reference.mean_car_jobs[column]:,.1f} jobs; "
+        print(f"  {threshold:g} min: baseline car mean = {reference.mean_car_jobs[column]:,.1f} opportunities; "
               f"low = {reference.threshold_jobs(column, 'low'):,.1f}; "
               f"high = {reference.threshold_jobs(column, 'high'):,.1f}")
     print("\nSufficient attached hexagons (%):")

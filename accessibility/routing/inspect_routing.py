@@ -20,6 +20,7 @@ from accessibility.inputs.links.linkstats import LinkTravelTimes
 from accessibility.inputs.links.network import PTNetwork, load_road_networks
 from accessibility.inputs.links.schedule import TransitSchedule
 from accessibility.inputs.grid.snapping import ScenarioRoadSnapper
+from accessibility.inputs.grid import destination_settings as dest
 from .road import RoadRouter
 from .pt import PTRouter
 
@@ -28,8 +29,8 @@ from .pt import PTRouter
 RUN_DIR = PROJECT_ROOT / "data" / "Simulated_Runs_v2" / "baseline_00000"
 NETWORK_FILE = RUN_DIR / "network.xml.gz"
 SCHEDULE_FILE = RUN_DIR / "transit_schedule.xml.gz"
-LINKSTATS_FILE = RUN_DIR / "targets" / "linkstats.txt.gz"
-SPATIAL_DIR = PROJECT_ROOT / "data" / "accessibility" /  "spatial_baseline"
+LINKSTATS_FILE = RUN_DIR / "200.linkstats.txt.gz"
+SPATIAL_DIR = dest.spatial_dir()
 
 HOUR_START = 8
 BIKE_SPEED_M_S = 4.17  # Provisional: verify the actual MATSim/eQasim bike speed
@@ -37,7 +38,7 @@ PT_TRANSFER_PENALTY_S = 300.0
 ORIGIN_SNAP_M = 500.0
 JOB_SNAP_M = 300.0
 MAX_COST_S = 30 * 60
-NUM_SAMPLE_ORIGINS = 200
+NUM_SAMPLE_ORIGINS = 5
 
 
 def _inspect(name: str, router, sample_ids: list[str]) -> None:
@@ -50,9 +51,9 @@ def _inspect(name: str, router, sample_ids: list[str]) -> None:
             print(f"  {origin}: not attached")
             continue
         reachable = np.isfinite(costs)
-        print(f"  {origin}: {int(reachable.sum()):,} reachable employment cells; "
+        print(f"  {origin}: {int(reachable.sum()):,} reachable opportunity locations; "
               f"minimum {costs[reachable].min():.1f}s" if reachable.any()
-              else f"  {origin}: 0 reachable employment cells")
+              else f"  {origin}: 0 reachable opportunity locations")
     print(f"  {len(sample_ids)} queries: {perf_counter()-start:.4f} s")
 
 
@@ -92,6 +93,7 @@ def main() -> None:
     print(f"Network: {NETWORK_FILE}")
     print(f"Schedule: {SCHEDULE_FILE}")
     print(f"Linkstats: {LINKSTATS_FILE} ({linkstats.travel_time_column})")
+    print(f"Destination source: {dest.opportunity_label()}")
     print(f"Sample origins: {sample_ids}")
     print(f"Road preparation: {t1-t0:.3f}s; PT preparation: {t2-t1:.3f}s")
     print(f"PT skipped jobs absent from jobs.csv: {len(pt_router.unknown_job_ids)}")

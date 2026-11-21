@@ -16,15 +16,16 @@ from time import perf_counter
 import pandas as pd
 
 from accessibility.inputs.grid.snapping import ScenarioRoadSnapper
+from accessibility.inputs.grid import destination_settings as dest
 from accessibility.inputs.links.linkstats import LinkTravelTimes
 from accessibility.inputs.links.network import load_road_networks
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SPATIAL_DIR = PROJECT_ROOT / "data" / "accessibility" / "spatial_baseline"
+SPATIAL_DIR = dest.spatial_dir()
 
-SCENARIO_DIR = PROJECT_ROOT / "data" / "Simulated_Runs_v2" / "cluster_00051"
+SCENARIO_DIR = PROJECT_ROOT / "data" / "Simulated_Runs" / "baseline_00000"
 SCENARIO_NETWORK_FILE = SCENARIO_DIR / "network.xml.gz"
-SCENARIO_LINKSTATS_FILE = SCENARIO_DIR / "targets" / "linkstats.txt.gz"
+SCENARIO_LINKSTATS_FILE = SCENARIO_DIR / "200.linkstats.txt.gz"
 
 MAX_ORIGIN_SNAP_M = 500.0
 MAX_JOB_SNAP_M = 300.0
@@ -44,7 +45,7 @@ def describe(mode: str, attachments: object, jobs: pd.DataFrame) -> None:
             print(f"    Unattached examples: {result.unsnapped_ids[:5]}")
     attached_ids = set(attachments.jobs.connectors["point_id"])
     attached_jobs = jobs.loc[jobs["job_id"].astype(str).isin(attached_ids), "jobs"].sum()
-    print(f"    Attached employment: {attached_jobs:,.0f}")
+    print(f"    Attached opportunities: {attached_jobs:,.0f}")
 
 
 def main() -> None:
@@ -77,7 +78,8 @@ def main() -> None:
     print("Dynamic road snapping — in-memory scenario connectors")
     print("=" * 66)
     print(f"Scenario network: {SCENARIO_NETWORK_FILE}")
-    print(f"Fixed locations: {len(origins):,} origins, {len(jobs):,} employment cells")
+    print(f"Fixed locations: {len(origins):,} origins, {len(jobs):,} "
+          f"{dest.opportunity_label()}")
     describe("car", car_connections, jobs)
     describe("bike", bike_connections, jobs)
     print(f"Times: fixed inputs {t1-t0:.3f}s; scenario networks {t2-t1:.3f}s; "

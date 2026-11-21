@@ -16,13 +16,14 @@ import pandas as pd
 from shapely.geometry import LineString
 
 from .pt_mapping import PTStopMapper
+from . import destination_settings as dest
 from accessibility.inputs.links.schedule import TransitSchedule
 
 from preprocessing.utils import PROJECT_ROOT
 
 RUN_DIR = PROJECT_ROOT / "data" / "Simulated_Runs_v2" / "baseline_00000"
 SCHEDULE_FILE = RUN_DIR / "transit_schedule.xml.gz"
-SPATIAL_DIR = PROJECT_ROOT / "data" / "accessibility" / "spatial_baseline"
+SPATIAL_DIR = dest.spatial_dir()
 OUTPUT_DIR = SPATIAL_DIR
 
 # Straight-line catchment radius. Every served stop in the radius is retained.
@@ -30,7 +31,7 @@ MAX_ORIGIN_STOP_DISTANCE_M = 800.0
 MAX_JOB_STOP_DISTANCE_M = 800.0
 WALK_SPEED_M_S = 1.3
 WALK_DETOUR_FACTOR = 1.3  # Matsim default approximation; raise if desired
-EXPORT_GPKG = False
+EXPORT_GPKG = True
 
 
 def _describe(label: str, result) -> None:
@@ -153,7 +154,8 @@ def main() -> None:
     print("=" * 70)
     print(f"Schedule: {SCHEDULE_FILE}")
     print(f"Served PT stop facilities: {mapper.num_stops:,}")
-    print(f"Origins: {len(origins):,}; employment cells: {len(jobs):,}; jobs: {jobs.jobs.sum():,.0f}")
+    print(f"Origins: {len(origins):,}; {dest.opportunity_label()}: {len(jobs):,}; "
+          f"total opportunities: {jobs.jobs.sum():,.0f}")
     print(f"Catchment: origin {MAX_ORIGIN_STOP_DISTANCE_M:g} m; "
           f"destination {MAX_JOB_STOP_DISTANCE_M:g} m")
     print(f"Walking time = crow-flight distance × {WALK_DETOUR_FACTOR:g} / {WALK_SPEED_M_S:g} m/s")
@@ -162,7 +164,8 @@ def main() -> None:
     _describe("PT employment", job_links)
     valid_jobs = set(job_links.connectors.point_id)
     included = jobs.loc[jobs.job_id.isin(valid_jobs), "jobs"].sum()
-    print(f"  Employment with PT egress: {included:,.0f} jobs ({100*included/jobs.jobs.sum():.1f}%)")
+    print(f"  Opportunities with PT egress: {included:,.0f} "
+          f"({100*included/jobs.jobs.sum():.1f}% of total)")
     if EXPORT_GPKG:
         diag = OUTPUT_DIR / "pt_mapping_diagnostics.gpkg"
         _save_gpkg(diag, origins, jobs, mapper, origin_links, job_links)
