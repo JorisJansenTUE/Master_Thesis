@@ -128,7 +128,7 @@ def assess_sufficiency(accessibility: pd.DataFrame,
             enough = np.full(len(data), np.nan)
             shortfall = np.full(len(data), np.nan)
             enough[attached] = (values[attached] >= threshold).astype(float)
-            shortfall[attached] = np.maximum(0., 1. - values[attached] / threshold) ** 2
+            shortfall[attached] = np.maximum(0., 1. - values[attached] / threshold) #not quadratic shortfall
             data[f"sufficient_{level}_{postfix}"] = enough
             data[f"shortfall_{level}_{postfix}"] = shortfall
 
