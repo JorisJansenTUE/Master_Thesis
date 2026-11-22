@@ -57,10 +57,16 @@ def invoke(command: list[str], *, capture: bool = False) -> str:
 def active_slurm_job(job_id: str) -> bool:
     result = subprocess.run(
         ["squeue", "-h", "-j", job_id, "-o", "%i"],
-        text=True, capture_output=True, check=False,
+        text=True,
+        capture_output=True,
+        check=False,
     )
+
     if result.returncode:
+        if "invalid job id specified" in result.stderr.lower():
+            return False
         raise RuntimeError(f"squeue failed: {result.stderr.strip()}")
+
     return bool(result.stdout.strip())
 
 
