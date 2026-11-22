@@ -15,7 +15,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="${GA_REPO_ROOT:-$(cd -- "$SCRIPT_DIR/.." && pwd)}"
 RUN_ONE="$REPO_ROOT/network_sampling/dataset/run_one.py"
 
 if [[ "${1:-}" == "--worker" ]]; then
@@ -197,6 +197,7 @@ fi
 # dataset runner (2 CPUs, 6G, 30 minutes, 100 iterations, linkstats 25/5).
 # Deliberately no changes to network_sampling/dataset/run_all_scenarios.sh.
 SBATCH_ARGS=(
+    --export="ALL,GA_REPO_ROOT=$REPO_ROOT"
     --partition=mech-cst-mov.cpu.q
     --nodes=1
     --ntasks=1
