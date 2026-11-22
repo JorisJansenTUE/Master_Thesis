@@ -21,7 +21,7 @@ REFERENCE_FILE="${REFERENCE_FILE:-$GA_DATASET/references/sufficiency_reference_1
 SPATIAL_DIR="${SPATIAL_DIR:-$BASE/spatial_baseline}"
 
 # Existing MATSim inputs. MUST match the historical baseline source hashes.
-MATSIM_CONFIG="${MATSIM_CONFIG:-$BASE/rebuilds/530517/reprepared_531334/06_final_cut/locarno_config.xml}"
+MATSIM_CONFIG="${MATSIM_CONFIG:-$BASE/rebuilds/530517/reprepared_531334/06_final_scenario/locarno_config.xml}"
 MATSIM_POPULATION="${MATSIM_POPULATION:-$BASE/rebuilds/530517/reprepared_531334/simulation_output/output_plans.xml.gz}"
 MATSIM_JAR="${MATSIM_JAR:-/home/20201733/eqasim-java-Fork/switzerland/target/switzerland.jar}"
 
