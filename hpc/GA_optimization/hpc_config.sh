@@ -4,7 +4,7 @@
 # No data are placed in the Git worktree by default.
 
 # Resolve this worktree, not the old Master_Thesis checkout.
-HPC_REPO="${HPC_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)}"
+HPC_REPO="${HPC_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)}"
 BASE="${BASE:-/home/20201733/locarno_ETH_Model}"
 
 # Completed historical MATSim simulations, including baseline_00000.

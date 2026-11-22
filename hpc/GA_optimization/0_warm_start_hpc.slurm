@@ -10,8 +10,7 @@
 #SBATCH --error=ga-warmstart_%j.err
 
 set -Eeuo pipefail
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-source "$SCRIPT_DIR/hpc_config.sh"
+source "$SLURM_SUBMIT_DIR/hpc/GA_optimization/hpc_config.sh"
 
 module purge
 module load Umbrella/2024
