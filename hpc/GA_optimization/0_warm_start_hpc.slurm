@@ -3,8 +3,8 @@
 #SBATCH --partition=mech-cst-mov.cpu.q
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=8G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=32G
 #SBATCH --time=06:00:00
 #SBATCH --output=ga-warmstart_%j.out
 #SBATCH --error=ga-warmstart_%j.err
@@ -65,6 +65,7 @@ ARGS=(
   --count "$WARM_COUNT"
   --max-overlap "$WARM_MAX_OVERLAP"
   --limit "$WARM_LIMIT"
+  --workers "${SLURM_CPUS_PER_TASK:-1}"
 )
 if [[ "$WARM_EXISTING_ONLY" == 1 ]]; then ARGS+=(--existing-only); fi
 "$PYTHON_BIN" -m optimization.warm_start "${ARGS[@]}"

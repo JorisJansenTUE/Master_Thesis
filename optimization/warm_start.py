@@ -17,6 +17,7 @@ import json
 import math
 import os
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from accessibility.inputs.grid import destination_settings as dest
@@ -35,7 +36,7 @@ SPATIAL_DIR = dest.spatial_dir()
 REFERENCE_FILE = dest.baseline_reference_file(BASELINE_NAME).with_name(
     "sufficiency_reference_15min.json"
 )
-BUDGET_M = 50000.0
+BUDGET_M = 5000.0
 WARM_START_COUNT = 8                  # for example, 8 of a 40-individual population
 MAX_SEGMENT_OVERLAP = 0.70           # maximum Jaccard similarity of street segments
 
@@ -145,6 +146,19 @@ def _evaluate(path: Path, spatial_dir: Path, reference_file: Path,
                              score_only=False, **kwargs)
 
 
+def _score_worker(task: tuple[Path, Path, Path, bool]):
+    """Score one *independent* scenario; workers never write shared GA outputs.
+
+    The fixed baseline reference and attachment mask must exist before workers
+    start. Only the main process writes the warm-start ranking and manifest.
+    """
+    path, spatial_dir, reference_file, existing_only = task
+    try:
+        return _evaluate(path, spatial_dir, reference_file, existing_only), None
+    except (OSError, ValueError, KeyError, TypeError, ZeroDivisionError, RuntimeError) as exc:
+        return None, (type(exc).__name__, str(exc))
+
+
 def _segment_similarity(a: set[str], b: set[str]) -> float:
     union = a | b
     return len(a & b) / len(union) if union else 1.0
@@ -179,9 +193,11 @@ def _write_ranking(path: Path, rows: list[dict], selected_hashes: set[str]) -> N
 def build_warm_start(
     dataset: Path, output: Path, spatial_dir: Path, reference_file: Path,
     *, count: int, budget_m: float, max_overlap: float, limit: int = 0,
-    existing_only: bool = False,
+    existing_only: bool = False, workers: int = 1,
 ) -> dict:
     """Score historical completed scenarios and export valid, diverse GA seeds."""
+    if workers < 1:
+        raise ValueError("workers must be at least 1")
     dataset = dataset.resolve(strict=True)
     baseline_dir = dataset / BASELINE_NAME
     baseline_metadata = _read_json(baseline_dir / "scenario.json")
@@ -193,7 +209,10 @@ def build_warm_start(
     print("Scoring the fixed baseline...", flush=True)
     baseline_score = _evaluate(baseline_dir, spatial_dir, reference_file, existing_only)
 
-    seen: set[str] = set()
+    # Stage 1: filter cheap metadata and deduplicate *before* expensive routing.
+    # Each unique scenario is then independent and can run in a process pool.
+    queued_hashes: set[str] = set()
+    candidates: list[dict] = []
     rows: list[dict] = []
     skips = Counter()
     considered = 0
@@ -231,31 +250,58 @@ def build_warm_start(
                 continue
             individual = _individual_from_records(records)
             key = configuration_hash(individual)
-            if key in seen:
+            if key in queued_hashes:
                 skips["duplicate configuration"] += 1
                 continue
             if limit and considered >= limit:
                 break
             considered += 1
-            score = _evaluate(path, spatial_dir, reference_file, existing_only)
-            seen.add(key)
-            rows.append({
-                "scenario": path.name, "strategy": metadata.get("strategy", "unknown"),
-                "config_hash": key, "fitness": float(score["fitness"]),
-                "budget_used_m": budget, "interventions": records,
-                "segments": {iv.segment_id for iv in individual}, "score": score,
+            queued_hashes.add(key)
+            candidates.append({
+                "path": path, "scenario": path.name,
+                "strategy": metadata.get("strategy", "unknown"),
+                "config_hash": key, "budget_used_m": budget,
+                "interventions": records,
+                "segments": {iv.segment_id for iv in individual},
             })
-            if considered % 20 == 0:
-                print(f"  Processed {considered} candidates; scored {len(rows)}", flush=True)
         except (OSError, ValueError, KeyError, TypeError, ZeroDivisionError, RuntimeError) as exc:
             skips[type(exc).__name__] += 1
             if warnings_shown < 10:
                 print(f"  SKIP {path.name}: {exc}", flush=True)
                 warnings_shown += 1
 
+    print(f"Eligible unique candidates: {len(candidates)}; "
+          f"scoring with {workers} process(es)", flush=True)
+    tasks = [(row["path"], spatial_dir, reference_file, existing_only)
+             for row in candidates]
+
+    def collect(scored):
+        nonlocal warnings_shown
+        for candidate, (score, error) in zip(candidates, scored):
+            if error is not None:
+                category, message = error
+                skips[category] += 1
+                if warnings_shown < 10:
+                    print(f"  SKIP {candidate['scenario']}: {message}", flush=True)
+                    warnings_shown += 1
+                continue
+            row = {k: v for k, v in candidate.items() if k != "path"}
+            row.update(fitness=float(score["fitness"]), score=score)
+            rows.append(row)
+            if len(rows) % 20 == 0:
+                print(f"  Scored {len(rows)}/{len(candidates)} candidates", flush=True)
+
+    # Baseline has already been evaluated, so all workers only read the common
+    # sufficiency reference and attachment mask. Each writes its *own* folder.
+    if workers == 1:
+        collect(map(_score_worker, tasks))
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            collect(pool.map(_score_worker, tasks, chunksize=1))
+
     if not rows:
         raise RuntimeError("No comparable scenarios could be scored. Check saved "
-                           "accessibility/linkstats, baseline references, and 5 km budget.")
+                           "accessibility/linkstats, baseline references, and the GA budget.")
 
     rows.sort(key=lambda x: (-x["fitness"], x["scenario"]))
     print(f"Loading baseline network to validate candidate seeds...", flush=True)
@@ -332,13 +378,15 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=0, help="Scoring pilot: process only first N eligible scenarios (0=all)")
     parser.add_argument("--existing-only", action="store_true",
                         help="Only rescore scenarios with saved accessibility CSVs; do not route")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="Parallel historical accessibility processes (default: 1)")
     args = parser.parse_args()
-    if args.budget < 0 or args.count < 1 or not 0 <= args.max_overlap <= 1 or args.limit < 0:
-        parser.error("Budget must be nonnegative, count positive, overlap in [0,1], limit >= 0")
+    if args.budget < 0 or args.count < 1 or not 0 <= args.max_overlap <= 1 or args.limit < 0 or args.workers < 1:
+        parser.error("Budget must be nonnegative, count positive, overlap in [0,1], limit >= 0, workers >= 1")
     build_warm_start(args.dataset, args.output, args.spatial_dir, args.reference,
                      count=args.count, budget_m=args.budget,
                      max_overlap=args.max_overlap, limit=args.limit,
-                     existing_only=args.existing_only)
+                     existing_only=args.existing_only, workers=args.workers)
 
 
 if __name__ == "__main__":
