@@ -1,7 +1,7 @@
 """Run one generated scenario with the existing Swiss eQasim JAR.
 
-Sequence: PrepareInterventionPopulation (route mode + PT repair) -> MATSim ->
-verified compact extraction. Nothing about GNN feature creation occurs here.
+Sequence: MATSim connectivity validation -> PrepareInterventionPopulation
+(route mode + PT repair) -> MATSim -> verified compact extraction. Nothing about GNN feature creation occurs here.
 The --delete-raw switch is deliberately opt-in.
 """
 from __future__ import annotations
@@ -16,6 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from network_sampling.dataset.compact_outputs import compact
+from network_sampling.validation.matsim_connectivity import (
+    MatsimConnectivityError, check_matsim_connectivity,
+)
 
 PREPARE_MAIN = "org.thesis.PrepareInterventionPopulation"
 SIMULATION_MAIN = "org.eqasim.switzerland.ch_cmdp.RunSimulation"
@@ -143,6 +146,25 @@ def run(args: argparse.Namespace) -> None:
     }
     _status_write(status_path, status)
     try:
+        # Run the same mode-specific, turn-restriction-aware connectivity
+        # check as MATSim's NetworkRoutingProvider BEFORE PT route preparation.
+        # The simulation runner always has --jar, including GA SLURM workers.
+        try:
+            connectivity = check_matsim_connectivity(
+                network, jar, java=args.java,
+                log_path=scenario / "matsim_connectivity.log",
+            )
+        except MatsimConnectivityError:
+            # Expected invalid infrastructure scenario. The GA will assign its
+            # usual penalty with --penalize-failed, rather than crash the step.
+            raise
+        except RuntimeError:
+            # Broken/missing validator class, Java error etc. is NOT an invalid
+            # infrastructure scenario; do not accidentally penalize as fitness.
+            status["state"] = "validation_error"
+            raise
+        for summary in connectivity.values():
+            print(summary, flush=True)
         _execute(preprocess, cwd=workdir, log_path=scenario / "routecheck.log", env=env)
         _required_file(checked)
         raw.mkdir(exist_ok=True)
@@ -164,7 +186,10 @@ def run(args: argparse.Namespace) -> None:
             }
     except Exception as exc:
         if status["state"] != "completed":
-            status["state"] = "failed"
+            if status["state"] != "validation_error":
+                status["state"] = "failed"
+            if isinstance(exc, MatsimConnectivityError):
+                status["failure_stage"] = "matsim_connectivity"
             status["error"] = f"{type(exc).__name__}: {exc}"
         else:
             status["postprocessing"] = {

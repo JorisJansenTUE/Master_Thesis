@@ -8,7 +8,8 @@ A dataset contains street_segments.csv.gz and dataset_manifest.json once.
 Run from Master_Thesis as:
     python -m network_sampling.dataset.generate \
         --network "$NETWORK" --schedule "$SCHEDULE" --out "$DATASET" \
-        --samples 10 --strategies baseline random corridor cluster
+        --samples 10 --strategies baseline random corridor cluster \
+        --matsim-jar "$MATSIM_JAR"
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ import argparse
 from concurrent.futures import ProcessPoolExecutor
 import multiprocessing as mp
 import hashlib
+import os
 import json
 import random
 import tempfile
@@ -33,6 +35,9 @@ from network_sampling.sampling.cluster import sample_clusters
 from network_sampling.sampling.corridor_mixed import sample_corridor_package
 from network_sampling.sampling.random import sample_random
 from network_sampling.validation.connectivity import check_connectivity
+from network_sampling.validation.matsim_connectivity import (
+    MatsimConnectivityError, check_matsim_connectivity,
+)
 
 from network_sampling.interventions.matsim_app.apply_scenario import apply_matsim_scenario
 
@@ -247,6 +252,8 @@ def write_intervention_scenario_files(
     schedule: Path,
     interventions: list,
     budget_m: float,
+    matsim_jar: Path | None = None,
+    java: str = "java",
 ) -> tuple[list[dict], float, int, dict]:
     """Write one explicitly selected intervention list using the dataset pipeline.
 
@@ -272,6 +279,12 @@ def write_intervention_scenario_files(
     if not connectivity or not all(connectivity.values()):
         raise ValueError(f"Final connectivity check failed: {connectivity}")
 
+    # Optional here because GA.prepare_one calls this shared writer without a
+    # Java JAR. GA validity is checked in run_one, where --jar is always known.
+    # Dataset generation passes --matsim-jar and retries rejected candidates.
+    if matsim_jar is not None:
+        check_matsim_connectivity(network_file, matsim_jar, java=java)
+
     n_mapped = write_link_mapping(stage / "link_mapping.csv.gz", base.index,
                                   base.network, modified)
     (stage / "interventions.json").write_text(
@@ -281,7 +294,8 @@ def write_intervention_scenario_files(
 
 
 def generate_one(strategy: str, seed: int, out: Path, schedule: Path,
-                 base: Baseline, identity: dict, max_attempts: int) -> None:
+                 base: Baseline, identity: dict, max_attempts: int,
+                 matsim_jar: Path | None = None, java: str = "java") -> None:
     scenario_id = f"{strategy}_{seed:05d}"
     settings, stratum_info = _scenario_settings(strategy, seed, identity["settings"])
     randomize = stratum_info is not None
@@ -311,7 +325,12 @@ def generate_one(strategy: str, seed: int, out: Path, schedule: Path,
                 records, used_m, n_mapped, connectivity = write_intervention_scenario_files(
                     stage, base=base, schedule=schedule, interventions=interventions,
                     budget_m=settings["budget_m"],
+                    matsim_jar=matsim_jar, java=java,
                 )
+            except MatsimConnectivityError as exc:
+                reason = str(exc)
+                print(f"REJECT {scenario_id} attempt={attempt + 1}: {reason}", flush=True)
+                continue
             except ValueError as exc:
                 # The same connectivity checks as the original sampler path.
                 if not (str(exc).startswith("Interventions disconnect the following modes:")
@@ -362,9 +381,10 @@ _PARALLEL_CONTEXT = None
 def _generate_worker(task: tuple[str, int]) -> None:
     if _PARALLEL_CONTEXT is None:
         raise RuntimeError("Generation worker missing inherited baseline context")
-    base, schedule_path, out, identity, max_attempts = _PARALLEL_CONTEXT
+    base, schedule_path, out, identity, max_attempts, matsim_jar, java = _PARALLEL_CONTEXT
     strategy, seed = task
-    generate_one(strategy, seed, out, schedule_path, base, identity, max_attempts)
+    generate_one(strategy, seed, out, schedule_path, base, identity,
+                 max_attempts, matsim_jar, java)
 
 
 def main() -> None:
@@ -375,6 +395,12 @@ def main() -> None:
     parser.add_argument("--samples", type=int, default=10, help="Samples PER strategy; baseline only once")
     parser.add_argument("--start-seed", type=int, default=0)
     parser.add_argument("--max-attempts", type=int, default=30)
+    parser.add_argument("--matsim-jar", type=Path, default=os.environ.get("MATSIM_JAR"),
+                        help="Switzerland JAR with org.thesis.ValidateNetworkConnectivity "
+                             "(or set MATSIM_JAR environment variable)")
+    parser.add_argument("--java", default="java", help="Java executable")
+    parser.add_argument("--skip-matsim-connectivity-check", action="store_true",
+                        help="Explicitly skip turn-restriction-aware validation (legacy mode)")
     parser.add_argument("--workers", type=int, default=1, help="Parallel scenario-generation processes (Linux fork; default 1)")
     parser.add_argument("--budget", type=float, default=DEFAULT_SETTINGS["budget_m"])
     parser.add_argument("--randomize-parameters", action="store_true",
@@ -402,9 +428,25 @@ def main() -> None:
         parser.error("--workers must be positive")
     if args.randomize_parameters and args.budget != DEFAULT_SETTINGS["budget_m"]:
         parser.error("--budget is overridden by --randomize-parameters; edit BUDGET_STRATA_M instead")
+    if not args.skip_matsim_connectivity_check and args.matsim_jar is None:
+        parser.error("--matsim-jar (or MATSIM_JAR) is required for the MATSim connectivity check; "
+                     "use --skip-matsim-connectivity-check to run legacy sampling")
 
+    matsim_jar = (None if args.skip_matsim_connectivity_check
+                  else Path(args.matsim_jar).resolve(strict=True))
     network_path = args.network.resolve(strict=True)
     schedule_path = args.schedule.resolve(strict=True)
+    if matsim_jar is not None:
+        if not matsim_jar.is_file():
+            parser.error(f"MATSim JAR is not a file: {matsim_jar}")
+        # Validate the reference network once: a failed baseline or missing
+        # compiled Java class must not consume a large sampling batch.
+        for summary in check_matsim_connectivity(
+            network_path, matsim_jar, java=args.java,
+        ).values():
+            print(f"BASELINE {summary}", flush=True)
+    else:
+        print("WARNING: MATSim connectivity validation explicitly skipped", flush=True)
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     settings = dict(
@@ -423,6 +465,10 @@ def main() -> None:
         parser.error("corridor shares must be in [0,1]")
     if args.corridor_bus_share + args.corridor_destination_share > 1:
         parser.error("corridor bus/destination shares cannot sum above 1")
+    if matsim_jar is not None:
+        # A stricter acceptance rule changes the sampling dataset; do not mix
+        # checked and unchecked scenarios under the same dataset_manifest.json.
+        settings["matsim_mode_validation"] = "cleanNetwork_car_bike_truck_v1"
     if args.randomize_parameters:
         settings["parameter_sampling"] = {
             "version": PARAMETER_SAMPLING_VERSION,
@@ -447,12 +493,14 @@ def main() -> None:
     ]
     if args.workers == 1:
         for strategy, seed in tasks:
-            generate_one(strategy, seed, out, schedule_path, base, identity, args.max_attempts)
+            generate_one(strategy, seed, out, schedule_path, base, identity,
+                         args.max_attempts, matsim_jar, args.java)
     else:
         # Linux/HPC only: fork lets workers inherit the read-only baseline
         # without reloading it for each task. Every task has a unique directory.
         global _PARALLEL_CONTEXT
-        _PARALLEL_CONTEXT = (base, schedule_path, out, identity, args.max_attempts)
+        _PARALLEL_CONTEXT = (base, schedule_path, out, identity,
+                             args.max_attempts, matsim_jar, args.java)
         print(f"Generating {len(tasks)} scenarios with {args.workers} processes", flush=True)
         with ProcessPoolExecutor(
             max_workers=args.workers,
