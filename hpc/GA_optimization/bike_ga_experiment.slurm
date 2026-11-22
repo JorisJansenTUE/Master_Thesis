@@ -15,7 +15,7 @@ source "$REPO/hpc/GA_optimization/hpc_config.sh"
 export BASE SPATIAL_DIR
 export BIKE_REFERENCE_FILE="${BIKE_REFERENCE_FILE:-$REFERENCE_FILE}"
 export BIKE_DATASET_MANIFEST="${BIKE_DATASET_MANIFEST:-$HISTORICAL_DATASET/dataset_manifest.json}"
-export BIKE_GA_OUT="${BIKE_GA_OUT:-$BASE/Bike_Accessibility_GA_AllBike}"
+export BIKE_GA_OUT="${BIKE_GA_OUT:-$BASE/Bike_Accessibility_GA_AllBike_operator_v2}"
 export BIKE_GA_SEED="${BIKE_GA_SEED:-20261122}"
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 

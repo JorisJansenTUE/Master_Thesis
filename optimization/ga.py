@@ -1,7 +1,8 @@
-"""Small, source-compatible genetic operators for MATSim intervention lists.
+"""Spatially aware genetic operators for MATSim road-space interventions.
 
-An individual is a list[network_sampling.interventions.intervention_types.Intervention].
-No networks, scenarios, or MATSim jobs are created here.
+Individuals retain the established list[Intervention] representation. All
+eligibility, width, compatibility and directed-connectivity rules continue to
+come from network_sampling; this module never implements a second sampler.
 """
 from __future__ import annotations
 
@@ -9,6 +10,7 @@ import hashlib
 import json
 import random
 from collections import defaultdict
+from dataclasses import dataclass
 
 from network_sampling.interventions.compatibility import interventions_compatible
 from network_sampling.interventions.intervention_types import Intervention, RoadSpaceVariant
@@ -17,19 +19,17 @@ from network_sampling.sampling.random import intervention_length
 from network_sampling.validation.connectivity import check_connectivity
 
 
-def configuration_hash(individual: list[Intervention]) -> str:
-    """Order-independent ID for an intervention *configuration*.
+# Target budgets for immigrants: fractions of the GA's MAXIMUM budget.
+# The independent samplers remain unchanged; they receive a smaller target.
+IMMIGRANT_BUDGET_FRACTIONS = ((0.05, 0.20), (0.20, 0.47), (0.47, 1.0))
 
-    Intended for comparisons within one baseline/model version. Before reusing
-    MATSim results, the evaluation system must also check baseline/settings IDs.
-    """
+
+def configuration_hash(individual: list[Intervention]) -> str:
+    """Order-independent configuration identifier, compatible with prior GA."""
     records = [
-        (
-            str(iv.segment_id),
-            iv.intervention_type.value,
-            iv.road_space_variant.value if iv.road_space_variant is not None else None,
-            tuple(sorted(str(link) for link in iv.target_link_ids)),
-        )
+        (str(iv.segment_id), iv.intervention_type.value,
+         iv.road_space_variant.value if iv.road_space_variant is not None else None,
+         tuple(sorted(str(link) for link in iv.target_link_ids)))
         for iv in individual
     ]
     data = json.dumps(sorted(records, key=lambda row: json.dumps(row)), separators=(",", ":"))
@@ -37,7 +37,6 @@ def configuration_hash(individual: list[Intervention]) -> str:
 
 
 def _basic_check(individual, *, eligible, network, index, budget_m) -> str | None:
-    """Cheap checks before applying a full MATSim network."""
     if budget_m < 0:
         raise ValueError("budget_m must be non-negative")
     if len(individual) != len(set(individual)):
@@ -47,8 +46,6 @@ def _basic_check(individual, *, eligible, network, index, budget_m) -> str | Non
         return "intervention not in baseline eligibility list"
     if intervention_length(individual, index) > budget_m + 1e-6:
         return "road-space budget exceeded"
-
-    # Compatible bus lanes in opposite directions can share a segment.
     groups: dict[str, list[Intervention]] = defaultdict(list)
     for iv in individual:
         for existing in groups[iv.segment_id]:
@@ -62,11 +59,7 @@ def validate_individual(
     individual: list[Intervention], *, eligible: list[Intervention],
     network, index, budget_m: float,
 ) -> tuple[bool, str]:
-    """Validate eligibility, compatibility, budget and directed modal connectivity.
-
-    Uses the established network_sampling application and connectivity rules.
-    An empty list is allowed (valid baseline configuration).
-    """
+    """Fast eligibility and directed-modal check. Java checking happens on XML."""
     problem = _basic_check(individual, eligible=eligible, network=network,
                            index=index, budget_m=budget_m)
     if problem is not None:
@@ -75,7 +68,6 @@ def validate_individual(
         modified, _ = apply_interventions(network, index, individual)
         connected = check_connectivity(network, modified)
     except ValueError as exc:
-        # A disconnected baseline is an invalid input, not a repairable child.
         if str(exc).startswith("Baseline "):
             raise
         return False, str(exc)
@@ -85,100 +77,261 @@ def validate_individual(
     return True, "ok"
 
 
+@dataclass
+class SpatialContext:
+    """Physical street adjacency and eligibility, built once per GA generation."""
+    neighbors: dict[str, tuple[str, ...]]
+    by_segment: dict[str, tuple[Intervention, ...]]
+
+
+def build_spatial_context(eligible: list[Intervention], index) -> SpatialContext:
+    by_segment: dict[str, list[Intervention]] = defaultdict(list)
+    for iv in eligible:
+        by_segment[str(iv.segment_id)].append(iv)
+    by_node: dict[str, set[str]] = defaultdict(set)
+    for segment in index.all():
+        by_node[str(segment.node_a)].add(str(segment.id))
+        by_node[str(segment.node_b)].add(str(segment.id))
+    neighbors = {}
+    for segment in index.all():
+        sid = str(segment.id)
+        neighbors[sid] = tuple(sorted((by_node[str(segment.node_a)] |
+                                       by_node[str(segment.node_b)]) - {sid}))
+    return SpatialContext(neighbors=neighbors,
+                          by_segment={k: tuple(v) for k, v in by_segment.items()})
+
+
+def _segment_ids(individual):
+    return {str(iv.segment_id) for iv in individual}
+
+
+def _connected_patch(individual, ctx: SpatialContext, index, rng: random.Random,
+                     target_m: float) -> set[str]:
+    """Select one contiguous patch of the parent's OWN physical segments."""
+    present = _segment_ids(individual)
+    if not present:
+        return set()
+    seed = rng.choice(sorted(present))
+    patch, frontier = set(), [seed]
+    used = 0.0
+    while frontier:
+        at = rng.randrange(len(frontier))
+        sid = frontier.pop(at)
+        if sid in patch or sid not in present:
+            continue
+        patch.add(sid)
+        used += float(index.get(sid).length_m)
+        if used >= target_m:
+            break
+        nxt = [v for v in ctx.neighbors.get(sid, ())
+               if v in present and v not in patch and v not in frontier]
+        rng.shuffle(nxt)
+        frontier.extend(nxt)
+    return patch
+
+
+def _segment_cost(individual, index) -> float:
+    return sum(float(index.get(iv.segment_id).length_m) for iv in individual)
+
+
 def repair_individual(
     proposed: list[Intervention], *, eligible: list[Intervention],
     network, index, budget_m: float,
+    protected: list[Intervention] | None = None,
 ) -> list[Intervention]:
-    """Repair by dropping conflicts/over-budget genes, then car-removal genes.
+    """Preserve the primary parent's unchanged genes wherever possible.
 
-    Conservative rather than optimal: no new intervention is invented. The
-    original order is respected, so operators can put preferred genes first.
+    Newly introduced genes are attempted after protected genes. If connectivity
+    fails, unprotected additions are removed first; only then is a disruptive
+    inherited REMOVE_CAR gene considered. Never return an invalid individual.
     """
     allowed = set(eligible)
+    protected = list(protected or [])
+    priority = protected + [iv for iv in proposed if iv not in protected]
     chosen: list[Intervention] = []
     groups: dict[str, list[Intervention]] = defaultdict(list)
     used = 0.0
-    for iv in proposed:
+    for iv in priority:
         if iv not in allowed or iv in chosen:
             continue
-        cost = index.get(iv.segment_id).length_m
+        cost = float(index.get(iv.segment_id).length_m)
         if used + cost > budget_m + 1e-6:
             continue
-        if not all(interventions_compatible(iv, old, network) for old in groups[iv.segment_id]):
+        if not all(interventions_compatible(iv, old, network)
+                   for old in groups[str(iv.segment_id)]):
             continue
         chosen.append(iv)
-        groups[iv.segment_id].append(iv)
+        groups[str(iv.segment_id)].append(iv)
         used += cost
 
+    protected_set = set(protected)
     while True:
         ok, _ = validate_individual(chosen, eligible=eligible, network=network,
                                     index=index, budget_m=budget_m)
         if ok:
             return chosen
-        # Only REMOVE_CAR changes can disconnect baseline car/truck access.
-        removable = [i for i, iv in enumerate(chosen)
-                     if iv.road_space_variant == RoadSpaceVariant.REMOVE_CAR]
+        # Remove newly inserted invasive genes first, preserving an inherited
+        # corridor even if the new variant is invalid or connectivity-breaking.
+        unprotected = [i for i, iv in enumerate(chosen) if iv not in protected_set]
+        invasive = [i for i, iv in enumerate(chosen)
+                    if iv.road_space_variant == RoadSpaceVariant.REMOVE_CAR]
+        removable = ([i for i in unprotected if i in invasive]
+                     or unprotected or invasive)
         if not removable:
-            # Defensive fallback: if another issue arose, do not return an
-            # invalid candidate or hide it as a successful repair.
+            # A genuinely invalid protected set should never be silently accepted.
             raise ValueError("Cannot repair offspring with current operators")
         chosen.pop(removable[-1])
 
 
+def _eligible_neighbor(ctx, present, rng):
+    frontier = set()
+    for sid in present:
+        frontier.update(n for n in ctx.neighbors.get(sid, ())
+                        if n not in present and n in ctx.by_segment)
+    return rng.choice(sorted(frontier)) if frontier else None
+
+
+def _variants_on_segment(ctx, sid, old=None):
+    return [iv for iv in ctx.by_segment.get(sid, ()) if iv != old]
+
+
 def mutate(
     parent: list[Intervention], *, eligible: list[Intervention], network,
-    index, budget_m: float, rng: random.Random, max_attempts: int = 15,
+    index, budget_m: float, rng: random.Random, max_attempts: int = 18,
+    context: SpatialContext | None = None, diagnostics: dict | None = None,
 ) -> list[Intervention]:
-    """One random add, remove or replace mutation; return a valid offspring.
-
-    If every trial fails, return the unchanged parent (also valid).
-    """
+    """Local extend/trim/shift/variant and occasional new component mutation."""
     if max_attempts < 1:
         raise ValueError("max_attempts must be positive")
+    ctx = context or build_spatial_context(eligible, index)
     parent_key = configuration_hash(parent)
+    by_present = _segment_ids(parent)
+    ops = ["extend", "extend", "trim", "trim", "shift", "shift",
+           "variant", "variant", "new_component", "remove_patch"]
     for _ in range(max_attempts):
-        operation = rng.choice(("add", "remove", "replace", "replace"))
+        op = rng.choice(ops)
         proposed = list(parent)
-        if operation == "remove":
-            if not proposed:
+        protected: list[Intervention] = list(parent)
+
+        if op == "extend":
+            sid = _eligible_neighbor(ctx, by_present, rng)
+            if sid is None:
                 continue
-            proposed.pop(rng.randrange(len(proposed)))
-        elif operation == "add":
+            proposed.append(rng.choice(_variants_on_segment(ctx, sid)))
+        elif op == "new_component":
             if not eligible:
                 continue
-            proposed.append(rng.choice(eligible))
-        else:  # replace an existing gene, usually on the same segment
-            if not proposed or not eligible:
+            choices = [iv for iv in eligible if str(iv.segment_id) not in by_present]
+            if not choices:
                 continue
-            pos = rng.randrange(len(proposed))
-            old = proposed.pop(pos)
-            local = [iv for iv in eligible if iv.segment_id == old.segment_id
-                     and iv != old]
-            options = local if local and rng.random() < 0.5 else eligible
-            proposed.insert(pos, rng.choice(options))
+            proposed.append(rng.choice(choices))
+        elif op == "variant":
+            if not proposed:
+                continue
+            old = rng.choice(proposed)
+            variants = _variants_on_segment(ctx, str(old.segment_id), old)
+            if not variants:
+                continue
+            proposed.remove(old)
+            proposed.append(rng.choice(variants))
+            protected.remove(old)
+        elif op in ("trim", "shift", "remove_patch"):
+            if not by_present:
+                continue
+            if op == "remove_patch":
+                patch = _connected_patch(parent, ctx, index, rng,
+                                         max(1.0, rng.uniform(0.03, 0.12) * budget_m))
+            else:
+                # Prefer an endpoint in a corridor to preserve its middle.
+                ends = [sid for sid in by_present
+                        if sum(n in by_present for n in ctx.neighbors.get(sid, ())) <= 1]
+                patch = {rng.choice(sorted(ends or by_present))}
+            proposed = [iv for iv in proposed if str(iv.segment_id) not in patch]
+            protected = list(proposed)
+            if op == "shift":
+                sid = _eligible_neighbor(ctx, _segment_ids(proposed), rng)
+                if sid is None:
+                    # Relocation can also shift the whole 1-segment component.
+                    possible = set()
+                    for removed_sid in patch:
+                        possible.update(ctx.neighbors.get(removed_sid, ()))
+                    options = sorted(s for s in possible if s in ctx.by_segment and
+                                     s not in _segment_ids(proposed))
+                    sid = rng.choice(options) if options else None
+                if sid is not None:
+                    proposed.append(rng.choice(_variants_on_segment(ctx, sid)))
+        else:
+            raise AssertionError(op)
 
-        # Prefer the intended new gene when repairing; avoid arbitrary
-        # order effects during duplicate/compatibility removal.
-        if operation == "add":
-            proposed = [proposed[-1], *proposed[:-1]]
-        child = repair_individual(proposed, eligible=eligible, network=network,
-                                  index=index, budget_m=budget_m)
+        try:
+            child = repair_individual(proposed, eligible=eligible, network=network,
+                                      index=index, budget_m=budget_m, protected=protected)
+        except ValueError as exc:
+            if str(exc) != "Cannot repair offspring with current operators":
+                raise
+            continue
         if configuration_hash(child) != parent_key:
+            if diagnostics is not None:
+                label = "mutation_" + op
+                diagnostics[label] = diagnostics.get(label, 0) + 1
             return child
+    if diagnostics is not None:
+        diagnostics["mutation_no_change"] = diagnostics.get("mutation_no_change", 0) + 1
     return list(parent)
 
 
 def crossover(
     a: list[Intervention], b: list[Intervention], *,
     eligible: list[Intervention], network, index, budget_m: float,
-    rng: random.Random,
+    rng: random.Random, context: SpatialContext | None = None,
+    diagnostics: dict | None = None,
 ) -> list[Intervention]:
-    """Uniform crossover of variable-length intervention lists, with repair."""
-    selected = [iv for iv in a if rng.random() < 0.5]
-    selected.extend(iv for iv in b if rng.random() < 0.5)
-    rng.shuffle(selected)
-    return repair_individual(selected, eligible=eligible, network=network,
-                             index=index, budget_m=budget_m)
+    """Replace a compact connected patch of parent A with a patch from B.
+
+    Unlike uniform crossover, existing corridors outside the replaced physical
+    street patch are retained intact. Both patches may be in different areas:
+    this also enables trading space between disconnected intervention clusters.
+    """
+    ctx = context or build_spatial_context(eligible, index)
+    if not b:
+        return list(a)
+    for _ in range(10):
+        fraction = rng.uniform(0.04, 0.25)
+        patch_b = _connected_patch(b, ctx, index, rng,
+                                   max(1.0, fraction * budget_m))
+        if not patch_b:
+            continue
+        patch_a = _connected_patch(a, ctx, index, rng,
+                                   max(1.0, fraction * budget_m))
+        retained_a = [iv for iv in a if str(iv.segment_id) not in patch_a]
+        block_b = [iv for iv in b if str(iv.segment_id) in patch_b]
+        # Try newly transferred genes before discarding any retained A genes.
+        candidate = retained_a + block_b
+        try:
+            child = repair_individual(candidate, eligible=eligible, network=network,
+                                      index=index, budget_m=budget_m,
+                                      protected=retained_a)
+        except ValueError as exc:
+            if str(exc) != "Cannot repair offspring with current operators":
+                raise
+            continue
+        # A crossover must transfer at least one gene from B, not merely
+        # shorten A after exceeding the budget.
+        if (configuration_hash(child) != configuration_hash(a)
+                and any(iv in child for iv in block_b if iv not in retained_a)):
+            if diagnostics is not None:
+                diagnostics["crossover_changed"] = diagnostics.get("crossover_changed", 0) + 1
+            return child
+    if diagnostics is not None:
+        diagnostics["crossover_no_change"] = diagnostics.get("crossover_no_change", 0) + 1
+    return list(a)
+
+
+def _sample_target_budget(budget_m: float, attempt: int, rng: random.Random) -> float:
+    if budget_m <= 0:
+        return 0.0
+    lo, hi = IMMIGRANT_BUDGET_FRACTIONS[attempt % len(IMMIGRANT_BUDGET_FRACTIONS)]
+    return max(min(250.0, budget_m), rng.uniform(lo, hi) * budget_m)
 
 
 def initial_population(
@@ -186,10 +339,10 @@ def initial_population(
     settings: dict, initial: list[list[Intervention]] | None = None,
     max_attempts: int | None = None,
 ) -> list[list[Intervention]]:
-    """Distinct, validated population from optional seeds and existing samplers.
+    """Distinct validated population, including mixed-budget immigrants.
 
-    The 'initial' argument permits warm starts later without changing the GA.
-    No fitness values are inferred here.
+    Existing samplers receive a sampled TARGET budget <= the GA's limit;
+    final validity always uses the original GA maximum budget.
     """
     from network_sampling.dataset.generate import sample
 
@@ -220,21 +373,24 @@ def initial_population(
             return population
 
     strategies = ("random", "corridor", "cluster")
-    attempts = size * 40 if max_attempts is None else max_attempts
+    attempts = size * 50 if max_attempts is None else max_attempts
+    offset = rng.randrange(len(IMMIGRANT_BUDGET_FRACTIONS))
     for attempt in range(attempts):
         if len(population) == size:
             return population
         strategy = strategies[attempt % len(strategies)]
         seed = rng.randrange(2**31)
+        local_settings = {**settings,
+                          "budget_m": _sample_target_budget(budget_m, attempt + offset, rng)}
         try:
-            candidate = sample(strategy, seed, base, settings)
+            candidate = sample(strategy, seed, base, local_settings)
         except (ValueError, RuntimeError):
-            continue  # A sampler can fail to produce a feasible scenario.
+            continue
         consider(candidate)
 
     if len(population) < size:
         raise RuntimeError(
             f"Only {len(population)}/{size} distinct valid individuals after "
-            f"{attempts} attempts; try a larger budget or more attempts"
+            f"{attempts} attempts; try more attempts or inspect sampler constraints"
         )
     return population

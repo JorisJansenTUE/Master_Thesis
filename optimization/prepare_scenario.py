@@ -21,19 +21,19 @@ from network_sampling.dataset.generate import (
     write_intervention_scenario_files,
 )
 from network_sampling.dataset.link_mapping import write_street_segments
+from network_sampling.validation.matsim_connectivity import check_matsim_connectivity
 from network_sampling.interventions.intervention_types import (
     Intervention, InterventionType, RoadSpaceVariant,
 )
 from optimization.ga import (
     configuration_hash, crossover, initial_population, mutate, validate_individual,
 )
-from preprocessing.utils import PROJECT_ROOT
 
 # ------------------------- Editable settings -------------------------------
-BASELINE_DIR = PROJECT_ROOT / "data" / "Simulated_Runs_v2" / "baseline_00000"
+BASELINE_DIR = Path("data/Simulated_Runs_v2/baseline_00000")
 NETWORK_FILE = BASELINE_DIR / "network.xml.gz"
 SCHEDULE_FILE = BASELINE_DIR / "transit_schedule.xml.gz"
-OUTPUT_DIR = PROJECT_ROOT / "data" / "GA_Pilot"  # Separate from the existing training dataset!
+OUTPUT_DIR = Path("data/GA_Pilot")  # Separate from the existing training dataset!
 WIDTH_ATTRIBUTE = "carriageway_width_m"
 BUDGET_M = 5000.0
 SEED = 42
@@ -78,7 +78,8 @@ def make_example_individual(base, settings: dict, seed: int, kind: str):
 
 def prepare_one(network_path: Path, schedule_path: Path, out: Path,
                 interventions: list[Intervention], base, settings: dict,
-                source: str) -> Path:
+                source: str, *, matsim_jar: Path | None = None,
+                java: str = "java") -> Path:
     """Publish one self-contained MATSim scenario; never overwrite completed work."""
     out.mkdir(parents=True, exist_ok=True)
     identity = _dataset_manifest(out, network_path, schedule_path, settings)
@@ -104,6 +105,8 @@ def prepare_one(network_path: Path, schedule_path: Path, out: Path,
                 old.get("baseline_hashes") != identity["baseline_hashes"] or
                 old.get("settings") != settings):
             raise RuntimeError(f"Existing scenario has different identity: {target}")
+        if matsim_jar is not None:
+            check_matsim_connectivity(target / "network.xml.gz", matsim_jar, java=java)
         print(f"SKIP already prepared: {target}")
     else:
         with tempfile.TemporaryDirectory(prefix=f".{scenario_id}_", dir=out) as temp:
@@ -111,6 +114,7 @@ def prepare_one(network_path: Path, schedule_path: Path, out: Path,
             records, used_m, mapped, connectivity = write_intervention_scenario_files(
                 stage, base=base, schedule=schedule_path, interventions=interventions,
                 budget_m=settings["budget_m"],
+                matsim_jar=matsim_jar, java=java,
             )
             metadata = {
                 "schema_version": SCHEMA_VERSION,

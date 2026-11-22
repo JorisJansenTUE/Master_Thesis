@@ -23,10 +23,11 @@ import os
 import random
 from pathlib import Path
 
-from network_sampling.dataset.generate import DEFAULT_SETTINGS, load_baseline
+from network_sampling.dataset.generate import DEFAULT_SETTINGS, load_baseline, sample
+from network_sampling.validation.matsim_connectivity import MatsimConnectivityError
 from optimization.ga import (
-    configuration_hash, crossover, initial_population, mutate,
-    validate_individual,
+    build_spatial_context, configuration_hash, crossover, initial_population,
+    mutate, validate_individual,
 )
 from optimization.prepare_scenario import prepare_one
 from optimization import warm_start as warm
@@ -38,15 +39,21 @@ BASELINE = Path("data/Simulated_Runs_v2/baseline_00000")
 WARM_START = DATASET / "warm_start.json"
 SPATIAL_DIR = warm.SPATIAL_DIR
 REFERENCE_FILE = warm.REFERENCE_FILE
-BUDGET_M = 50000.0
+BUDGET_M = 5000.0
 POPULATION_SIZE = 40
 GENERATIONS = 10               # Total, including generation 0
 SEED = 42
 ELITES = 2
 IMMIGRANT_FRACTION = 0.10
 TOURNAMENT_SIZE = 3
-CROSSOVER_PROBABILITY = 0.75
-MUTATION_PROBABILITY = 0.85
+CROSSOVER_PROBABILITY = 0.40  # Prefer local improvements over mixing patches
+MUTATION_PROBABILITY = 0.80
+OPERATOR_VERSION = "spatial_v1"
+PREFLIGHT_MAX_REPLACEMENTS = 80  # Bound resampling per invalid candidate
+# Used by existing HPC overnight runner, which invokes `step` without jar args.
+MATSIM_JAR = Path(os.environ.get(
+    "MATSIM_JAR", "/home/20201733/eqasim-java-Fork/switzerland/target/switzerland.jar"
+))
 # --------------------------------------------------------------------------
 
 STATE_FILE = "optimization_state.json"
@@ -148,14 +155,17 @@ def _validate_inputs(baseline: Path, reference: Path, warm_file: Path | None,
 
 
 def _entry(individual, *, source: str, created_generation: int,
-           fitness: float | None = None) -> dict:
-    return {
+           fitness: float | None = None, ancestry: dict | None = None) -> dict:
+    entry = {
         "interventions": _records(individual),
         "source": source,
         "created_generation": created_generation,
         "scenario": None if fitness is not None else "ga_" + configuration_hash(individual)[:16],
         "fitness": fitness,
     }
+    if ancestry:
+        entry["ancestry"] = ancestry
+    return entry
 
 
 def _generation_manifest(dataset: Path, generation: int, population: list[str],
@@ -177,21 +187,156 @@ def _generation_manifest(dataset: Path, generation: int, population: list[str],
     return target
 
 
-def _prepare_generation(state: dict, dataset: Path, base) -> Path:
+def _preflight_settings(jar: Path | None, *, java: str = "java") -> dict:
+    """Refuse to silently disable authoritative validation in production."""
+    if jar is None:
+        return {"enabled": False, "jar": None, "java": java}
+    jar = Path(jar).expanduser().resolve(strict=True)
+    if not jar.is_file():
+        raise FileNotFoundError(f"MATSim validator JAR is missing: {jar}")
+    return {"enabled": True, "jar": str(jar), "java": java}
+
+
+def _new_candidate_after_preflight_failure(
+    state: dict, base, *, parent_keys: list[str], seen: set[str],
+    rejected: set[str], rng: random.Random, diagnostics: dict,
+) -> list | None:
+    """Draw a genuinely new feasible individual without modifying network_sampling.
+
+    First try a local mutation of a successfully evaluated parent, then a
+    spatial crossover. Occasionally sample a new immigrant with a mixed target
+    budget. Never substitute a failed child with a duplicate in this generation.
+    """
+    archive = state["archive"]
+    valid_parents = [key for key in parent_keys
+                     if key in archive and archive[key]["fitness"] is not None
+                     and archive[key]["fitness"] >= 0]
+    ctx = build_spatial_context(base.eligible, base.index)
+    full_budget = state["budget_m"]
+    for attempt in range(100):
+        try:
+            choice = rng.random()
+            if valid_parents and choice < 0.68:
+                left_key = _tournament(valid_parents, archive, rng)
+                parent = _individual(archive[left_key]["interventions"])
+                candidate = mutate(parent, eligible=base.eligible, network=base.network,
+                                   index=base.index, budget_m=full_budget, rng=rng,
+                                   context=ctx, diagnostics=diagnostics)
+            elif len(valid_parents) > 1 and choice < 0.82:
+                left_key = _tournament(valid_parents, archive, rng)
+                right_key = _tournament(valid_parents, archive, rng)
+                candidate = crossover(
+                    _individual(archive[left_key]["interventions"]),
+                    _individual(archive[right_key]["interventions"]),
+                    eligible=base.eligible, network=base.network,
+                    index=base.index, budget_m=full_budget, rng=rng,
+                    context=ctx, diagnostics=diagnostics,
+                )
+            else:
+                strategy = rng.choice(("random", "corridor", "cluster"))
+                # Target can be short; the GA budget itself remains a MAXIMUM.
+                low, high = rng.choice(((0.05, 0.20), (0.20, 0.47), (0.47, 1.0)))
+                target = max(min(250.0, full_budget), rng.uniform(low, high) * full_budget)
+                settings = {**DEFAULT_SETTINGS, "budget_m": target}
+                candidate = sample(strategy, rng.randrange(2**31), base, settings)
+            if not candidate:
+                continue
+            key = configuration_hash(candidate)
+            if key in seen or key in rejected:
+                continue
+            ok, _ = validate_individual(candidate, eligible=base.eligible,
+                                        network=base.network, index=base.index,
+                                        budget_m=full_budget)
+            if ok:
+                return candidate
+        except ValueError as exc:
+            if str(exc) != "Cannot repair offspring with current operators":
+                raise
+        except RuntimeError:
+            # Existing independent samplers can run out of feasible additions.
+            continue
+    return None
+
+
+def _prepare_generation(
+    state: dict, dataset: Path, base, *, parent_keys: list[str] | None = None,
+    matsim_jar: Path | None = None, java: str = "java",
+) -> Path:
+    """Publish ONLY successfully prevalidated candidates into the SLURM manifest.
+
+    A disconnected MATSim network is rejected while still inside the atomic
+    scenario staging directory; its candidate is replaced before publishing
+    the generation checkpoint or submitting the simulation array. A validator
+    execution error is NOT treated as a candidate failure and is propagated.
+    """
     settings = {**DEFAULT_SETTINGS, "budget_m": state["budget_m"]}
     network = Path(state["baseline"]) / "network.xml.gz"
     schedule = Path(state["baseline"]) / "transit_schedule.xml.gz"
-    for key in state["population"]:
-        item = state["archive"][key]
-        if item["fitness"] is not None:
-            continue  # Historical result, elite, or duplicate from earlier generation.
-        individual = _individual(item["interventions"])
-        path = prepare_one(network, schedule, dataset, individual, base, settings,
-                           source=f"GA generation {state['generation']}")
-        if path.name != item["scenario"]:
-            raise RuntimeError("Generated scenario ID does not match its fingerprint")
+    archive = state["archive"]
+    seen = set(state["population"])
+    rejected: set[str] = set()
+    parents = list(parent_keys or ())
+    diagnostics = state.setdefault("preflight_stats", {})
+    gen_key = str(state["generation"])
+    stats = diagnostics.setdefault(gen_key, {"passed": 0, "rejected": 0,
+                                             "replacement_attempts": 0})
+    for slot in range(len(state["population"])):
+        rng = random.Random(f"preflight:{state['seed']}:{state['generation']}:{slot}")
+        for attempt in range(PREFLIGHT_MAX_REPLACEMENTS + 1):
+            key = state["population"][slot]
+            item = archive[key]
+            if item["fitness"] is not None:
+                break  # Historical fitness, elite or already evaluated child.
+            individual = _individual(item["interventions"])
+            try:
+                path = prepare_one(
+                    network, schedule, dataset, individual, base, settings,
+                    source=f"GA generation {state['generation']}",
+                    matsim_jar=matsim_jar, java=java,
+                )
+            except MatsimConnectivityError as exc:
+                # This is a configuration rejection, NOT a Java execution error.
+                rejected.add(key)
+                stats["rejected"] += 1
+                item["preflight_rejection"] = str(exc)
+                print(f"PREFLIGHT REJECT {item['scenario']}: {exc}", flush=True)
+                if attempt == PREFLIGHT_MAX_REPLACEMENTS:
+                    raise RuntimeError(
+                        f"Could not replace slot {slot} after {attempt} invalid candidates"
+                    ) from exc
+                replacement = _new_candidate_after_preflight_failure(
+                    state, base, parent_keys=parents,
+                    seen=seen, rejected=rejected, rng=rng, diagnostics=stats,
+                )
+                if replacement is None:
+                    raise RuntimeError(
+                        f"No unique feasible replacement for generation {state['generation']} "
+                        f"slot {slot}; check sampler and GA connectivity restrictions"
+                    ) from exc
+                replacement_key = configuration_hash(replacement)
+                seen.discard(key)
+                seen.add(replacement_key)
+                state["population"][slot] = replacement_key
+                if replacement_key not in archive:
+                    archive[replacement_key] = _entry(
+                        replacement, source="ga",
+                        created_generation=state["generation"],
+                        ancestry={"operator": "preflight_replacement", "parents": []},
+                    )
+                stats["replacement_attempts"] += 1
+                continue
+            if path.name != item["scenario"]:
+                raise RuntimeError("Generated scenario ID does not match its fingerprint")
+            stats["passed"] += 1
+            break
+        else:
+            raise RuntimeError(f"Preflight retries exceeded for slot {slot}")
+
     manifest = _generation_manifest(dataset, state["generation"],
-                                    state["population"], state["archive"])
+                                    state["population"], archive)
+    print(f"Generation {state['generation']} preflight: "
+          f"passed={stats['passed']}, rejected={stats['rejected']}, "
+          f"replacements={stats['replacement_attempts']}", flush=True)
     return manifest
 
 
@@ -242,6 +387,11 @@ def initialize(args: argparse.Namespace) -> None:
 
     state = {
         "version": 1,
+        "operator_version": OPERATOR_VERSION,
+        "preflight": ({"enabled": False, "jar": None, "java": args.java}
+                      if args.dry_run else _preflight_settings(
+                          None if args.skip_preflight else args.matsim_jar,
+                          java=args.java)),
         "fitness_version": FITNESS_VERSION,
         "fitness_settings": _fitness_settings(),
         "baseline": str(args.baseline),
@@ -270,7 +420,12 @@ def initialize(args: argparse.Namespace) -> None:
     if args.dry_run:
         print("DRY RUN: No scenario files or optimisation state written.")
         return
-    manifest = _prepare_generation(state, dataset, base)
+    check = state["preflight"]
+    manifest = _prepare_generation(
+        state, dataset, base,
+        matsim_jar=Path(check["jar"]) if check["enabled"] else None,
+        java=check["java"],
+    )
     _write(state_path, state)
     print(f"State: {state_path}\nSubmit manifest: {manifest}")
     print("No MATSim simulations were launched.")
@@ -365,12 +520,15 @@ def _tournament(keys: list[str], archive: dict, rng: random.Random) -> str:
     return max(contestants, key=lambda key: (archive[key]["fitness"], key))
 
 
-def _offspring(state: dict, base) -> list:
-    """Elitism + tournament selection + GA operators + a few immigrants.
+def _offspring(state: dict, base, *, diagnostics: dict | None = None,
+               provenance: dict | None = None) -> list:
+    """Elitism, spatial crossover, predominantly local mutation, and immigrants.
 
-    Randomness is deterministic from seed and new generation number; an
-    interrupted step can therefore reproduce the same candidate list.
+    Candidate order is deterministic for the seed/generation. Connectivity
+    preflight happens in _prepare_generation, before state/manifest publication.
     """
+    diagnostics = diagnostics if diagnostics is not None else {}
+    provenance = provenance if provenance is not None else {}
     archive = state["archive"]
     ranked = sorted(state["population"], key=lambda key: (-archive[key]["fitness"], key))
     target_size = state["population_size"]
@@ -380,6 +538,7 @@ def _offspring(state: dict, base) -> list:
     next_generation = state["generation"] + 1
     rng = random.Random(f"ga:{state['seed']}:{next_generation}")
     settings = {**DEFAULT_SETTINGS, "budget_m": state["budget_m"]}
+    context = build_spatial_context(base.eligible, base.index)
     immigrant_count = min(target_size - len(next_population),
                           math.ceil(target_size * state["immigrants"]))
     goal = target_size - immigrant_count
@@ -387,37 +546,54 @@ def _offspring(state: dict, base) -> list:
     attempts = 0
     while len(next_population) < goal and attempts < target_size * 100:
         attempts += 1
-        left = _individual(archive[_tournament(state["population"], archive, rng)]["interventions"])
+        left_key = _tournament(state["population"], archive, rng)
+        left = _individual(archive[left_key]["interventions"])
+        parents = [left_key]
+        label = "mutation"
         try:
             if rng.random() < CROSSOVER_PROBABILITY:
-                right = _individual(archive[_tournament(state["population"], archive, rng)]["interventions"])
-                child = crossover(left, right, eligible=base.eligible, network=base.network,
-                                  index=base.index, budget_m=state["budget_m"], rng=rng)
+                right_key = _tournament(state["population"], archive, rng)
+                right = _individual(archive[right_key]["interventions"])
+                child = crossover(left, right, eligible=base.eligible,
+                                  network=base.network, index=base.index,
+                                  budget_m=state["budget_m"], rng=rng,
+                                  context=context, diagnostics=diagnostics)
+                parents.append(right_key)
+                label = "spatial_crossover"
             else:
                 child = left
-
             if rng.random() < MUTATION_PROBABILITY:
                 child = mutate(child, eligible=base.eligible, network=base.network,
-                               index=base.index, budget_m=state["budget_m"], rng=rng)
-
+                               index=base.index, budget_m=state["budget_m"],
+                               rng=rng, context=context, diagnostics=diagnostics)
+                label += "+local_mutation" if len(parents) > 1 else "local_mutation"
         except ValueError as exc:
             if str(exc) != "Cannot repair offspring with current operators":
                 raise
+            diagnostics["repair_failed"] = diagnostics.get("repair_failed", 0) + 1
             continue
-
         key = configuration_hash(child)
-        if key in seen:
+        if key in seen or not child:
+            diagnostics["duplicate_or_empty"] = diagnostics.get("duplicate_or_empty", 0) + 1
             continue
         next_population.append(child)
         seen.add(key)
+        diagnostics["accepted_evolutionary"] = diagnostics.get("accepted_evolutionary", 0) + 1
+        provenance[key] = {
+            "operator": label, "parents": parents,
+            "best_parent_fitness": max(archive[k]["fitness"] for k in parents),
+        }
 
-    # The established samplers fill the immigrant slots and any unfilled slots
-    # after crossover repair/duplicates. Keep their existing budget/connectivity checks.
+    diagnostics["breeding_attempts"] = attempts
     if len(next_population) < target_size:
+        evolution_count = len(next_population)
         next_population = initial_population(
             base, size=target_size, budget_m=state["budget_m"],
             rng=rng, settings=settings, initial=next_population,
         )
+        diagnostics["immigrants"] = len(next_population) - evolution_count
+        for child in next_population[evolution_count:]:
+            provenance[configuration_hash(child)] = {"operator": "immigrant", "parents": []}
     return next_population
 
 
@@ -439,6 +615,39 @@ def _write_best(dataset: Path, state: dict) -> Path:
     return path
 
 
+def _write_operator_outcomes(dataset: Path, archive: dict) -> None:
+    """One row per evaluated offspring, with observed gain vs best parent.
+
+    This makes actual operator quality measurable rather than inferred from
+    population averages; failed simulations appear with success=False.
+    """
+    out = dataset / "optimization_operator_outcomes.csv"
+    tmp = out.with_name(out.name + ".tmp")
+    fields = ("generation", "scenario", "operator", "fitness", "valid",
+              "best_parent_fitness", "gain_over_best_parent")
+    with tmp.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fields)
+        writer.writeheader()
+        for key, item in sorted(archive.items(), key=lambda kv: (
+                kv[1]["created_generation"], kv[0])):
+            ancestry = item.get("ancestry")
+            if not ancestry or item.get("fitness") is None:
+                continue
+            score = item["fitness"]
+            best_parent = ancestry.get("best_parent_fitness")
+            writer.writerow({
+                "generation": item["created_generation"],
+                "scenario": item.get("scenario") or "ga_" + key[:16],
+                "operator": ancestry["operator"],
+                "fitness": score,
+                "valid": score >= 0,
+                "best_parent_fitness": best_parent,
+                "gain_over_best_parent": (score - best_parent if score >= 0
+                                          and best_parent is not None else None),
+            })
+    os.replace(tmp, out)
+
+
 def _write_history(dataset: Path, history: list[dict]) -> None:
     path = dataset / "optimization_history.csv"
     tmp = path.with_name(path.name + ".tmp")
@@ -458,6 +667,8 @@ def advance(args: argparse.Namespace) -> None:
     state = _json(state_path)
     if state["fitness_version"] != FITNESS_VERSION or state["version"] != 1:
         raise ValueError("Unsupported optimisation checkpoint/fitness version")
+    if state.get("operator_version") != OPERATOR_VERSION:
+        raise ValueError("This checkpoint uses different GA operators. Start a new dataset/run.")
     if state["fitness_settings"] != _fitness_settings():
         raise ValueError("Current fitness settings differ from this optimisation run")
     if state["phase"] == "complete":
@@ -488,6 +699,7 @@ def advance(args: argparse.Namespace) -> None:
     if not any(item["generation"] == state["generation"] for item in state["history"]):
         state["history"].append(summary)
     _write_history(dataset, state["history"])
+    _write_operator_outcomes(dataset, state["archive"])
     print(f"Completed generation {state['generation']}: best={summary['best_fitness']:.6f}, "
           f"mean={summary['mean_fitness']:.6f}")
     if state["generation"] + 1 == state["generations"]:
@@ -508,16 +720,24 @@ def advance(args: argparse.Namespace) -> None:
     base_settings = {**DEFAULT_SETTINGS, "budget_m": state["budget_m"]}
     base = load_baseline(baseline / "network.xml.gz",
                          baseline / "transit_schedule.xml.gz", base_settings)
-    next_population = _offspring(state, base)
+    diag, provenance = {}, {}
+    next_population = _offspring(state, base, diagnostics=diag, provenance=provenance)
     next_state = json.loads(json.dumps(state))  # simple independent JSON snapshot
     next_state["generation"] += 1
     next_state["population"] = [configuration_hash(x) for x in next_population]
     for item, key in zip(next_population, next_state["population"]):
         if key not in next_state["archive"]:
             next_state["archive"][key] = _entry(
-                item, source="ga", created_generation=next_state["generation"]
+                item, source="ga", created_generation=next_state["generation"],
+                ancestry=provenance.get(key),
             )
-    manifest = _prepare_generation(next_state, dataset, base)
+    next_state.setdefault("operator_stats", {})[str(next_state["generation"])] = diag
+    check = next_state["preflight"]
+    manifest = _prepare_generation(
+        next_state, dataset, base, parent_keys=state["population"],
+        matsim_jar=Path(check["jar"]) if check["enabled"] else None,
+        java=check["java"],
+    )
     _write(state_path, next_state)
     print(f"Prepared generation {next_state['generation']} with "
           f"{sum(next_state['archive'][k]['fitness'] is None for k in next_state['population'])} "
@@ -541,6 +761,11 @@ def main() -> None:
     init.add_argument("--elites", type=int, default=ELITES)
     init.add_argument("--immigrants", type=float, default=IMMIGRANT_FRACTION)
     init.add_argument("--dry-run", action="store_true")
+    init.add_argument("--matsim-jar", type=Path, default=MATSIM_JAR,
+                      help="Switzerland JAR containing ValidateNetworkConnectivity")
+    init.add_argument("--java", default="java")
+    init.add_argument("--skip-preflight", action="store_true",
+                      help="Only for local tests: skip authoritative Java preflight")
     status = sub.add_parser("status", help="Read checkpoint and scenario completion")
     step = sub.add_parser("step", help="Score completed jobs and prepare next generation")
     step.add_argument("--penalize-failed", action="store_true",
