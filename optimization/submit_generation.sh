@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash -l
 # Submit explicitly selected GA scenarios as a throttled SLURM array.
 #
 # Usage (on the HPC, from the repository root):
@@ -8,14 +8,15 @@
 # MANIFEST contains one scenario ID (e.g. ga_2c5238eb86d4f1c8) per line.
 # Pass DATASET/scenarios.txt for a small pilot, or a generation-specific manifest.
 #
-# Reuses network_sampling/dataset/run_all_scenarios.sh --worker and hence the
-# established run_one.py MATSim settings, postprocessing and status handling.
-# Neither the original submission script nor run_one.py is modified.
+# Calls the existing network_sampling.dataset.run_one implementation directly,
+# from THIS worktree. Does not modify or execute the dataset's SLURM launcher.
+# The MATSim CLI flags below intentionally mirror the known working dataset
+# runner: when simulation settings change, keep them in sync explicitly.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-DATASET_WORKER="$REPO_ROOT/network_sampling/dataset/run_all_scenarios.sh"
+RUN_ONE="$REPO_ROOT/network_sampling/dataset/run_one.py"
 
 if [[ "${1:-}" == "--worker" ]]; then
     shift
@@ -24,7 +25,10 @@ if [[ "${1:-}" == "--worker" ]]; then
         exit 2
     fi
     : "${SLURM_ARRAY_TASK_ID:?This entrypoint must run as a SLURM array task}"
-    SCENARIO="$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$1")"
+    MANIFEST="$1"; CONFIG="$2"; POPULATION="$3"; JAR="$4"; PYTHON="$5"
+    shift 5
+    FLAGS=("$@")
+    SCENARIO="$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$MANIFEST")"
     [[ -d "$SCENARIO" ]] || { echo "Missing GA scenario $SCENARIO" >&2; exit 1; }
 
     # Prevent two independently submitted arrays from writing to the same
@@ -34,8 +38,29 @@ if [[ "${1:-}" == "--worker" ]]; then
         echo "BLOCKED: scenario already being evaluated by another worker: $SCENARIO" >&2
         exit 1
     fi
-    bash "$DATASET_WORKER" --worker "$@"
-    exit $?
+
+    module purge
+    module load EESSI/2026.06
+    module load Java/25.36
+    cd "$REPO_ROOT"
+    export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+
+    echo "[$(date -Is)] START GA task=$SLURM_ARRAY_TASK_ID scenario=$SCENARIO host=$(hostname)"
+    "$PYTHON" -m network_sampling.dataset.run_one \
+        --scenario "$SCENARIO" \
+        --base-config "$CONFIG" \
+        --population "$POPULATION" \
+        --jar "$JAR" \
+        --threads 2 \
+        --heap 4G \
+        --initial-heap 1G \
+        --reset-heap 3G \
+        --last-iteration 100 \
+        --linkstats-interval 25 \
+        --linkstats-average-iterations 5 \
+        "${FLAGS[@]}"
+    echo "[$(date -Is)] DONE GA scenario=$SCENARIO"
+    exit 0
 fi
 
 if (( $# < 6 )); then
@@ -75,7 +100,7 @@ for arg in "$@"; do
     esac
 done
 
-for file in "$INPUT_MANIFEST" "$CONFIG" "$POPULATION" "$JAR" "$PYTHON" "$DATASET_WORKER"; do
+for file in "$INPUT_MANIFEST" "$CONFIG" "$POPULATION" "$JAR" "$PYTHON" "$RUN_ONE"; do
     [[ -s "$file" ]] || { echo "Missing/empty required file: $file" >&2; exit 2; }
 done
 for file in "$DATASET/dataset_manifest.json" "$DATASET/street_segments.csv.gz"; do
@@ -168,11 +193,9 @@ if (( N > 1000 )); then
     exit 2
 fi
 
-# Resource requests below mirror the CURRENT working dataset SLURM launcher.
-# Actual MATSim flags stay exclusively in its --worker entrypoint:
-# threads=2, heap=4G, reset_heap=3G, last_iteration=100,
-# linkstats_interval=25, linkstats_average_iterations=5.
-# Keep resource requests aligned if that worker is changed later.
+# Resource requests and the GA worker CLI flags above mirror the verified
+# dataset runner (2 CPUs, 6G, 30 minutes, 100 iterations, linkstats 25/5).
+# Deliberately no changes to network_sampling/dataset/run_all_scenarios.sh.
 SBATCH_ARGS=(
     --partition=mech-cst-mov.cpu.q
     --nodes=1
@@ -185,7 +208,7 @@ SBATCH_ARGS=(
     --error="$DATASET/slurm_logs/%A_%a.err"
     --array="0-$((N - 1))%$MAX_PARALLEL"
 )
-WORKER_ARGS=("$SCRIPT_DIR/submit_generation.sh" --worker "$RUN_MANIFEST" "$CONFIG" "$POPULATION" "$JAR" "$PYTHON")
+WORKER_ARGS=("$REPO_ROOT/optimization/submit_generation.sh" --worker "$RUN_MANIFEST" "$CONFIG" "$POPULATION" "$JAR" "$PYTHON")
 if (( DELETE_RAW == 1 )); then WORKER_ARGS+=(--delete-raw); fi
 
 if (( DRY_RUN == 1 )); then
