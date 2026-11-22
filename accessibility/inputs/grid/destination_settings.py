@@ -12,7 +12,7 @@ from preprocessing.utils import PROJECT_ROOT
 
 # Select "statent" (employees per 100 m cell) or "facilities" (one work
 # opportunity per MATSim facility containing the configured activity type).
-DESTINATION_SOURCE = "facilities"
+DESTINATION_SOURCE = "statent"
 
 STATENT_FILE = Path(
     r"C:\Users\20201733\Documents\Thesis\Data\Swiss_FSO\Employment-STATENT2023.zip"
