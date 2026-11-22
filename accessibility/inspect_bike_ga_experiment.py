@@ -60,7 +60,7 @@ REFERENCE_FILE = Path(os.environ.get(
     "BIKE_REFERENCE_FILE", str(BASE / "GA_Optimization/references/sufficiency_reference_15min.json")))
 OUTPUT_DIR = Path(os.environ.get("BIKE_GA_OUT", str(BASE / "Bike_Accessibility_GA_AllBike")))
 
-BUDGETS_KM = (15.0)
+BUDGETS_KM = (15.0,)
 POPULATION_SIZE = 100
 GENERATIONS = 80                # Includes generation 0; up to 24,000 evaluations over 3 budgets
 SEED = int(os.environ.get("BIKE_GA_SEED", "20261122"))
