@@ -388,15 +388,23 @@ def _offspring(state: dict, base) -> list:
     while len(next_population) < goal and attempts < target_size * 100:
         attempts += 1
         left = _individual(archive[_tournament(state["population"], archive, rng)]["interventions"])
-        if rng.random() < CROSSOVER_PROBABILITY:
-            right = _individual(archive[_tournament(state["population"], archive, rng)]["interventions"])
-            child = crossover(left, right, eligible=base.eligible, network=base.network,
-                              index=base.index, budget_m=state["budget_m"], rng=rng)
-        else:
-            child = left
-        if rng.random() < MUTATION_PROBABILITY:
-            child = mutate(child, eligible=base.eligible, network=base.network,
-                           index=base.index, budget_m=state["budget_m"], rng=rng)
+        try:
+            if rng.random() < CROSSOVER_PROBABILITY:
+                right = _individual(archive[_tournament(state["population"], archive, rng)]["interventions"])
+                child = crossover(left, right, eligible=base.eligible, network=base.network,
+                                  index=base.index, budget_m=state["budget_m"], rng=rng)
+            else:
+                child = left
+
+            if rng.random() < MUTATION_PROBABILITY:
+                child = mutate(child, eligible=base.eligible, network=base.network,
+                               index=base.index, budget_m=state["budget_m"], rng=rng)
+
+        except ValueError as exc:
+            if str(exc) != "Cannot repair offspring with current operators":
+                raise
+            continue
+
         key = configuration_hash(child)
         if key in seen:
             continue
