@@ -8,13 +8,13 @@
 #SBATCH --mem=16G
 #SBATCH --gpus=1
 #SBATCH --time=18:00:00
-#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_train_%j.out
-#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_train_%j.err
+#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis_delay/slurm_logs/gnn_train_%j.out
+#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis_delay/slurm_logs/gnn_train_%j.err
 set -Eeuo pipefail
 
-PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis
+PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis_delay
 GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt_delay}"
-VENV="${VENV:-$PROJECT_ROOT/.venv-gnn}"
+VENV="${VENV:-/vast.mnt/home/20201733/Master_Thesis/.venv-gnn}"
 EPOCHS="${EPOCHS:-150}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
 RUN_TAG="${RUN_TAG:-tt_delay_001}"

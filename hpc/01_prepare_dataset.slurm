@@ -10,11 +10,11 @@
 #SBATCH --error=/vast.mnt/home/20201733/Master_Thesis_delay/slurm_logs/gnn_prep_%j.err
 set -Eeuo pipefail
 
-PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis
+PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis_delay
 DATASET="${DATASET:-/vast.mnt/home/20201733/locarno_ETH_Model/training_dataset_v4}"
-GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt_road}"
+GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt_delay}"
 PEAK_HOUR="${PEAK_HOUR:-8}"
-VENV="${VENV:-$PROJECT_ROOT/.venv-gnn}"
+VENV="${VENV:-/vast.mnt/home/20201733/Master_Thesis/.venv-gnn}"
 WORKERS="${PREP_WORKERS:-12}"
 
 module purge
