@@ -88,8 +88,10 @@ def _fitness_settings() -> dict:
     """Freeze scoring choices so a resumed GA cannot mix objectives."""
     return {
         "mode_weights": warm.MODE_WEIGHTS,
-        "time_weights": {"15": 1.0},
+        "time_weights": {"20": 1.0},
         "sufficiency_level": warm.SUFFICIENCY_LEVEL,
+        "car_parking_penalty_s": warm.CAR_PARKING_PENALTY_S,
+        "car_sufficiency_tolerance_pp": warm.CAR_SUFFICIENCY_TOLERANCE_PP,
         "hour_start": warm.HOUR_START,
         "linkstats_statistic": warm.LINKSTATS_STATISTIC,
         "bike_speed_m_s": warm.BIKE_SPEED_M_S,
@@ -148,7 +150,8 @@ def _validate_inputs(baseline: Path, reference: Path, warm_file: Path | None,
         if warm_payload.get("baseline_attachment_sha256") != _hash(_mask_path(reference)):
             raise ValueError("Warm-start baseline attachment mask differs")
         expected = {key: _fitness_settings()[key] for key in
-                    ("mode_weights", "time_weights", "sufficiency_level")}
+                    ("mode_weights", "time_weights", "sufficiency_level",
+                     "car_parking_penalty_s", "car_sufficiency_tolerance_pp")}
         if warm_payload.get("fitness_settings") != expected:
             raise ValueError("Warm-start fitness settings differ from current GA settings")
     return metadata, status, warm_payload
@@ -509,9 +512,15 @@ def _score_current(state: dict, dataset: Path, *, penalize_failed: bool) -> int:
             print(f"WAIT scoring {scenario.name}: {type(exc).__name__}: {exc}")
             continue
         entry["fitness"] = fitness
+        entry["raw_fitness"] = float(score["raw_fitness"])
+        entry["feasible"] = bool(score["feasible"])
+        entry["car_constraint"] = score["car_constraint"]
         _write(dataset / STATE_FILE, state)
         new += 1
-        print(f"SCORED {scenario.name}: fitness={fitness:.6f}")
+        print(f"SCORED {scenario.name}: fitness={fitness:.6f} "
+              f"(raw={score['raw_fitness']:.6f}, "
+              f"car_feasible={score['feasible']}, "
+              f"violation={score['car_constraint']['violation_pp']:.3f} pp)")
     return new
 
 
@@ -601,7 +610,7 @@ def _write_best(dataset: Path, state: dict) -> Path:
     ranked = [(item["fitness"], key, item) for key, item in state["archive"].items()
               if item["fitness"] is not None and item["fitness"] >= 0]
     if not ranked:
-        print("No successful configurations to export (all evaluations failed).")
+        print("No feasible configurations to export (all failed or violated the car constraint).")
         return None
     score, key, item = max(ranked, key=lambda record: (record[0], record[1]))
     path = dataset / "optimization_best.json"

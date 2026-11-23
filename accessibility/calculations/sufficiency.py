@@ -28,10 +28,13 @@ class SufficiencyReference:
     mean_car_jobs: dict[str, float]
     low_fraction: float = 0.5
     high_fraction: float = 1.0
+    car_parking_penalty_s: float = 300.0
 
     def __post_init__(self) -> None:
         if not 0 < self.low_fraction < self.high_fraction:
             raise ValueError("Require 0 < low_fraction < high_fraction")
+        if not isfinite(self.car_parking_penalty_s) or self.car_parking_penalty_s < 0:
+            raise ValueError("Car parking penalty must be finite and nonnegative")
         if not self.mean_car_jobs:
             raise ValueError("No baseline car reference levels")
         for column, value in self.mean_car_jobs.items():
@@ -40,7 +43,8 @@ class SufficiencyReference:
 
     @classmethod
     def from_baseline_car(cls, car_results: pd.DataFrame,
-                          thresholds_min: tuple[float, ...]) -> "SufficiencyReference":
+                          thresholds_min: tuple[float, ...],
+                          *, car_parking_penalty_s: float = 300.0) -> "SufficiencyReference":
         """Unweighted mean across baseline car-attached origin hexagons.
 
         There are no residential population weights in the current inputs.
@@ -60,7 +64,7 @@ class SufficiencyReference:
             if values.isna().any() or not np.isfinite(values.to_numpy()).all():
                 raise ValueError(f"Non-finite baseline car accessibility in {col}")
             means[col] = float(values.mean())
-        return cls(means)
+        return cls(means, car_parking_penalty_s=car_parking_penalty_s)
 
     def threshold_jobs(self, column: str, level: str) -> float:
         if column not in self.mean_car_jobs:
@@ -74,9 +78,11 @@ class SufficiencyReference:
         path = Path(filename)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({
+            "version": 2,
             "reference": "baseline_car_attached_origin_mean",
             "weighting": "unweighted_hexagons",
             "mean_car_jobs": self.mean_car_jobs,
+            "car_parking_penalty_s": self.car_parking_penalty_s,
             "low_fraction": self.low_fraction,
             "high_fraction": self.high_fraction,
         }, indent=2) + "\n", encoding="utf-8")
@@ -84,12 +90,13 @@ class SufficiencyReference:
     @classmethod
     def load(cls, filename: str | Path) -> "SufficiencyReference":
         payload = json.loads(Path(filename).read_text(encoding="utf-8"))
-        if payload.get("reference") != "baseline_car_attached_origin_mean":
+        if payload.get("version") != 2 or payload.get("reference") != "baseline_car_attached_origin_mean":
             raise ValueError("Unrecognised sufficiency reference file")
         if payload.get("weighting") != "unweighted_hexagons":
             raise ValueError("Sufficiency reference weighting differs from this implementation")
         return cls({str(k): float(v) for k, v in payload["mean_car_jobs"].items()},
-                   float(payload["low_fraction"]), float(payload["high_fraction"]))
+                   float(payload["low_fraction"]), float(payload["high_fraction"]),
+                   float(payload["car_parking_penalty_s"]))
 
 
 def assess_sufficiency(accessibility: pd.DataFrame,
@@ -128,7 +135,7 @@ def assess_sufficiency(accessibility: pd.DataFrame,
             enough = np.full(len(data), np.nan)
             shortfall = np.full(len(data), np.nan)
             enough[attached] = (values[attached] >= threshold).astype(float)
-            shortfall[attached] = np.maximum(0., 1. - values[attached] / threshold) #not quadratic shortfall
+            shortfall[attached] = np.maximum(0., 1. - values[attached] / threshold) ** 2
             data[f"sufficient_{level}_{postfix}"] = enough
             data[f"shortfall_{level}_{postfix}"] = shortfall
 
@@ -146,6 +153,8 @@ def assess_sufficiency(accessibility: pd.DataFrame,
                 "n_unattached": len(subset)-n,
                 "mean_accessible_jobs": float(subset.loc[valid, col].mean()) if n else np.nan,
                 "baseline_car_mean_jobs": reference.mean_car_jobs[col],
+                "shortfall_formula": "squared_normalized_v2",
+                "car_parking_penalty_s": reference.car_parking_penalty_s,
             }
             for level in ("low", "high"):
                 enough = subset.loc[valid, f"sufficient_{level}_{postfix}"]

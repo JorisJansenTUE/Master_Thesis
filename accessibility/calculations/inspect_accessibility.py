@@ -36,16 +36,17 @@ NETWORK_FILE = RUN_DIR / "network.xml.gz"
 SCHEDULE_FILE = RUN_DIR / "transit_schedule.xml.gz"
 LINKSTATS_FILE = RUN_DIR / "targets" / "linkstats.txt.gz"
 BASELINE_RUN_NAME = "baseline_00000"
-REFERENCE_FILE = dest.baseline_reference_file(BASELINE_RUN_NAME)
+REFERENCE_FILE = dest.baseline_reference_file(BASELINE_RUN_NAME).with_name("sufficiency_reference_20min_park5.json")
 
-THRESHOLDS_MIN = (15.0, 20.0, 30.0)
-MAP_THRESHOLD_MIN = 15.0
+THRESHOLDS_MIN = (20.0,)
+MAP_THRESHOLD_MIN = 20.0
 HOUR_START = 8
 LINKSTATS_STATISTIC = "avg"
 BIKE_SPEED_M_S = 4.17  # Provisional, as in existing routing inspection.
 PT_TRANSFER_PENALTY_S = 300.0
 ORIGIN_SNAP_M = 500.0
 JOB_SNAP_M = 300.0
+CAR_PARKING_PENALTY_S = 300.0
 # ------ End settings ------
 
 
@@ -65,6 +66,7 @@ def main() -> None:
         pt_transfer_penalty_s=PT_TRANSFER_PENALTY_S,
         origin_snap_m=ORIGIN_SNAP_M,
         job_snap_m=JOB_SNAP_M,
+        car_parking_penalty_s=CAR_PARKING_PENALTY_S,
     )
     t2 = perf_counter()
 
@@ -72,6 +74,7 @@ def main() -> None:
         car_results = results.loc[results["mode"] == "car"]
         reference = SufficiencyReference.from_baseline_car(
             car_results, cumulative.thresholds_min,
+            car_parking_penalty_s=CAR_PARKING_PENALTY_S,
         )
         reference.save(REFERENCE_FILE)
         print(f"Baseline car reference saved: {REFERENCE_FILE}")
@@ -83,6 +86,8 @@ def main() -> None:
                 "from an intervention scenario."
             )
         reference = SufficiencyReference.load(REFERENCE_FILE)
+        if reference.car_parking_penalty_s != CAR_PARKING_PENALTY_S:
+            raise ValueError("Baseline reference parking penalty differs")
         print(f"Fixed baseline car reference loaded: {REFERENCE_FILE}")
 
     scored, summary = assess_sufficiency(results, reference, cumulative.thresholds_min)

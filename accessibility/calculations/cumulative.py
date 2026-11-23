@@ -17,7 +17,7 @@ class CumulativeAccessibility:
     An unreachable or unsnapped origin is NaN, not 0 accessible jobs.
     """
 
-    thresholds_min: tuple[float, ...] = (15.0, 20.0, 30.0)
+    thresholds_min: tuple[float, ...] = (20.0,)
 
     def __post_init__(self) -> None:
         values = tuple(sorted(set(float(t) for t in self.thresholds_min)))
@@ -34,22 +34,26 @@ class CumulativeAccessibility:
         value = f"{threshold_min:g}".replace(".", "p")
         return f"jobs_{value}min"
 
-    def evaluate(self, costs: np.ndarray | None, jobs: np.ndarray) -> dict[str, float]:
+    def evaluate(self, costs: np.ndarray | None, jobs: np.ndarray,
+                 *, extra_time_s: float = 0.0) -> dict[str, float]:
         if costs is None:
             return {self.column_name(t): float("nan") for t in self.thresholds_min}
+        if not isfinite(extra_time_s) or extra_time_s < 0:
+            raise ValueError("Extra journey time must be finite and nonnegative")
         if len(costs) != len(jobs):
             raise ValueError("Costs/jobs length mismatch")
         return {
-            self.column_name(t): float(jobs[costs <= t * 60.0].sum())
+            self.column_name(t): float(jobs[costs + extra_time_s <= t * 60.0].sum())
             for t in self.thresholds_min
         }
 
-    def run(self, router, origin_ids: Iterable[str], *, mode: str) -> pd.DataFrame:
+    def run(self, router, origin_ids: Iterable[str], *, mode: str,
+            extra_time_s: float = 0.0) -> pd.DataFrame:
         rows: list[dict] = []
         for hex_id in origin_ids:
             hex_id = str(hex_id)
             costs = router.shortest_job_costs(hex_id, self.max_cost_s)
             row = {"hex_id": hex_id, "mode": mode, "attached": costs is not None}
-            row.update(self.evaluate(costs, router.job_counts))
+            row.update(self.evaluate(costs, router.job_counts, extra_time_s=extra_time_s))
             rows.append(row)
         return pd.DataFrame(rows)

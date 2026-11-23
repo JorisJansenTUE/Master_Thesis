@@ -18,8 +18,8 @@ SCENARIOS = {        # First entry must be the baseline
     "Cluster": "cluster_00051",
     "Corridor": "corridor_00792",
 }
-MINUTES = 15
-OUTFILE = RESULTS_ROOT / "sufficiency_15min_comparison_v2_facilities.png"
+MINUTES = 20
+OUTFILE = RESULTS_ROOT / "sufficiency_20min_park5_comparison.png"
 # ==========================================================
 
 MODES = ("car", "bike", "pt")

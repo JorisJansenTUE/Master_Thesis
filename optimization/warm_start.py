@@ -34,15 +34,15 @@ OUTPUT = Path("data/GA_Pilot/warm_start.json")
 BASELINE_NAME = "baseline_00000"
 SPATIAL_DIR = dest.spatial_dir()
 REFERENCE_FILE = dest.baseline_reference_file(BASELINE_NAME).with_name(
-    "sufficiency_reference_15min.json"
+    "sufficiency_reference_20min_park5.json"
 )
 BUDGET_M = 5000.0
 WARM_START_COUNT = 8                  # for example, 8 of a 40-individual population
 MAX_SEGMENT_OVERLAP = 0.70           # maximum Jaccard similarity of street segments
 
 # Match your existing numerical fitness settings (Step 4).
-MODE_WEIGHTS = {"car": 1.0, "bike": 1.0, "pt": 1.0}
-TIME_WEIGHTS = {15.0: 1.0}
+MODE_WEIGHTS = {"car": 0.0, "bike": 1.0, "pt": 1.0}
+TIME_WEIGHTS = {20.0: 1.0}
 SUFFICIENCY_LEVEL = "high"
 HOUR_START = 8
 LINKSTATS_STATISTIC = "avg"
@@ -50,6 +50,8 @@ BIKE_SPEED_M_S = 4.17
 PT_TRANSFER_PENALTY_S = 300.0
 ORIGIN_SNAP_M = 500.0
 JOB_SNAP_M = 300.0
+CAR_PARKING_PENALTY_S = 300.0
+CAR_SUFFICIENCY_TOLERANCE_PP = 5.0
 # ---------------------------------------------------------------------------
 
 
@@ -130,13 +132,15 @@ def _evaluate(path: Path, spatial_dir: Path, reference_file: Path,
         linkstats_statistic=LINKSTATS_STATISTIC,
         bike_speed_m_s=BIKE_SPEED_M_S, pt_transfer_penalty_s=PT_TRANSFER_PENALTY_S,
         origin_snap_m=ORIGIN_SNAP_M, job_snap_m=JOB_SNAP_M,
+        car_parking_penalty_s=CAR_PARKING_PENALTY_S,
+        car_sufficiency_tolerance_pp=CAR_SUFFICIENCY_TOLERANCE_PP,
     )
     if cached:
         try:
             return evaluate_scenario(path, spatial_dir, reference_file,
                                      score_only=True, **kwargs)
-        except ValueError:
-            # A saved 15/20/30-minute or squared-shortfall CSV must be rebuilt.
+        except (ValueError, FileNotFoundError):
+            # Incompatible cached time/parking/shortfall data require fresh routing.
             if existing_only:
                 raise
             print(f"  Recalculating incompatible accessibility: {path.name}", flush=True)
@@ -169,7 +173,9 @@ def _write_ranking(path: Path, rows: list[dict], selected_hashes: set[str]) -> N
     headers = (
         "rank", "scenario", "strategy", "fitness", "budget_used_m",
         "intervention_count", "config_hash", "car_score", "bike_score",
-        "pt_score", "new_bike_attachments", "lost_bike_attachments", "selected",
+        "pt_score", "car_sufficient_share", "car_baseline_sufficient_share",
+        "car_violation_pp", "feasible",
+        "new_bike_attachments", "lost_bike_attachments", "selected",
     )
     tmp = path.with_name(path.name + ".tmp")
     with tmp.open("w", newline="", encoding="utf-8") as f:
@@ -183,6 +189,10 @@ def _write_ranking(path: Path, rows: list[dict], selected_hashes: set[str]) -> N
                 "intervention_count": len(row["interventions"]),
                 "config_hash": row["config_hash"],
                 **{f"{mode}_score": component[mode]["mode_score"] for mode in ("car", "bike", "pt")},
+                "car_sufficient_share": row["score"]["car_constraint"]["scenario_share"],
+                "car_baseline_sufficient_share": row["score"]["car_constraint"]["baseline_share"],
+                "car_violation_pp": row["score"]["car_constraint"]["violation_pp"],
+                "feasible": row["score"]["feasible"],
                 "new_bike_attachments": component["bike"]["n_newly_attached"],
                 "lost_bike_attachments": component["bike"]["n_lost_attachment"],
                 "selected": row["config_hash"] in selected_hashes,
@@ -312,6 +322,8 @@ def build_warm_start(
     for row in rows:
         if len(selected) == count:
             break
+        if not row["score"]["feasible"]:
+            continue
         if any(_segment_similarity(row["segments"], prev["segments"]) > max_overlap
                for prev in selected):
             continue
@@ -336,8 +348,10 @@ def build_warm_start(
         "baseline_attachment_sha256": baseline_score["baseline_attachment_sha256"],
         "budget_m": budget_m, "selection_max_segment_overlap": max_overlap,
         "fitness_settings": {
-            "mode_weights": MODE_WEIGHTS, "time_weights": {"15": 1.0},
+            "mode_weights": MODE_WEIGHTS, "time_weights": {"20": 1.0},
             "sufficiency_level": SUFFICIENCY_LEVEL,
+            "car_parking_penalty_s": CAR_PARKING_PENALTY_S,
+            "car_sufficiency_tolerance_pp": CAR_SUFFICIENCY_TOLERANCE_PP,
         },
         "historical_baseline_fitness": baseline_score["fitness"],
         "scored_candidates": len(rows), "skipped": dict(skips),

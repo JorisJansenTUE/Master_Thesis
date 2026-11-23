@@ -32,7 +32,7 @@ SCENARIOS = (
 )
 
 MODES = ("car", "bike", "pt")
-THRESHOLDS_MIN = (15, 20, 30)
+THRESHOLDS_MIN = (20,)
 
 # Use a robust colour scale to make local changes visible.
 # 100 = full range; 98 = clip the most extreme 2% of values.

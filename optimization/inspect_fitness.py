@@ -1,4 +1,4 @@
-"""Numerical accessibility + provisional fitness for one completed MATSim run.
+"""Numerical accessibility + squared sufficiency + car constraint for one completed MATSim run.
 
 Run from the thesis repository root:
     python -m optimization.inspect_fitness
@@ -21,18 +21,20 @@ from optimization.fitness import evaluate_scenario
 SCENARIO_DIR = Path("data/Simulated_Runs_v2/baseline_00000")
 SPATIAL_DIR = dest.spatial_dir()  # Based on destination_settings.DESTINATION_SOURCE
 BASELINE_NAME = "baseline_00000"
-BASELINE_REFERENCE_FILE = dest.baseline_reference_file(BASELINE_NAME).with_name("sufficiency_reference_15min.json")
+BASELINE_REFERENCE_FILE = dest.baseline_reference_file(BASELINE_NAME).with_name("sufficiency_reference_20min_park5.json")
 
 HOUR_START = 8
 LINKSTATS_STATISTIC = "avg"
-THRESHOLDS_MIN = (15.0,)
+THRESHOLDS_MIN = (20.0,)
 BIKE_SPEED_M_S = 4.17
 PT_TRANSFER_PENALTY_S = 300.0
 ORIGIN_SNAP_M = 500.0
 JOB_SNAP_M = 300.0
+CAR_PARKING_PENALTY_S = 300.0
+CAR_SUFFICIENCY_TOLERANCE_PP = 5.0
 
-# PROVISIONAL example objective. Change these later without rerunning MATSim.
-MODE_WEIGHTS = {"car": 1.0, "bike": 1.0, "pt": 1.0}
+# Sustainable-mode squared insufficiency; car is constrained separately.
+MODE_WEIGHTS = {"car": 0.0, "bike": 1.0, "pt": 1.0}
 TIME_WEIGHTS = {t: 1.0 for t in THRESHOLDS_MIN}
 SUFFICIENCY_LEVEL = "high"  # "low" or "high"
 # -------------------------------------------------------------------------
@@ -60,13 +62,18 @@ def main() -> None:
         pt_transfer_penalty_s=PT_TRANSFER_PENALTY_S,
         origin_snap_m=ORIGIN_SNAP_M,
         job_snap_m=JOB_SNAP_M,
+        car_parking_penalty_s=CAR_PARKING_PENALTY_S,
+        car_sufficiency_tolerance_pp=CAR_SUFFICIENCY_TOLERANCE_PP,
         score_only=args.score_only,
     )
     print(f"Scenario: {score['scenario']}")
-    print(f"Provisional fitness: {score['fitness']:.6f} "
+    print(f"Constrained fitness: {score['fitness']:.6f} "
           f"(weighted shortfall: {score['weighted_shortfall']:.6f})")
     print(f"Sufficiency level: {score['sufficiency_level']}; "
           f"weights: {score['mode_weights']}")
+    print(f"Car constraint: {'feasible' if score['feasible'] else 'infeasible'}; "
+          f"car share={100*score['car_constraint']['scenario_share']:.2f}% "
+          f"(minimum={100*score['car_constraint']['minimum_share']:.2f}%)")
     print(f"Output: {args.scenario / 'accessibility' / 'fitness.json'}")
     print(f"Elapsed: {perf_counter()-start:.2f}s")
 

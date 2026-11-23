@@ -23,13 +23,14 @@ def calculate_accessibility(
     scenario_dir: str | Path,
     spatial_dir: str | Path,
     *,
-    thresholds_min: tuple[float, ...] = (15.0, 20.0, 30.0),
+    thresholds_min: tuple[float, ...] = (20.0,),
     hour_start: int = 8,
     linkstats_statistic: str = "avg",
     bike_speed_m_s: float = 4.17,
     pt_transfer_penalty_s: float = 300.0,
     origin_snap_m: float = 500.0,
     job_snap_m: float = 300.0,
+    car_parking_penalty_s: float = 300.0,
     linkstats_override: LinkTravelTimes | None = None,
 ) -> pd.DataFrame:
     """Return per-origin car/bike/PT opportunities using the actual scenario.
@@ -79,9 +80,11 @@ def calculate_accessibility(
     )
     pt_router = PTRouter(pt_network, pt_origin, pt_jobs, jobs)
 
+    if car_parking_penalty_s < 0 or car_parking_penalty_s >= min(thresholds_min) * 60:
+        raise ValueError("Car parking penalty must be nonnegative and smaller than the shortest cutoff")
     cumulative = CumulativeAccessibility(thresholds_min)
     return pd.concat([
-        cumulative.run(car_router, origin_ids, mode="car"),
+        cumulative.run(car_router, origin_ids, mode="car", extra_time_s=car_parking_penalty_s),
         cumulative.run(bike_router, origin_ids, mode="bike"),
         cumulative.run(pt_router, origin_ids, mode="pt"),
     ], ignore_index=True)
