@@ -44,10 +44,47 @@ export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MPLBACKEND=Agg
 [[ -s "$GNN_DATA/gnn_static/dual_nodes.csv.gz" ]] || { echo "Missing GNN dual graph" >&2; exit 1; }
 [[ -s "$DATASET/baseline_00000/targets/linkstats.txt.gz" ]] || { echo "Missing baseline linkstats" >&2; exit 1; }
 [[ -s "$SPATIAL/origins.csv" ]] || { echo "Missing accessibility spatial inputs" >&2; exit 1; }
-[[ -s "$REFERENCE" ]] || { echo "Missing NEW baseline reference: $REFERENCE" >&2; echo "Run optimization.inspect_fitness on the HPC baseline first." >&2; exit 1; }
 ATTACHMENTS="${REFERENCE%.json}_attachments.json"
-[[ -s "$ATTACHMENTS" ]] || { echo "Missing NEW baseline eligibility mask: $ATTACHMENTS" >&2; echo "Run optimization.inspect_fitness on the HPC baseline first." >&2; exit 1; }
 
+if [[ ! -s "$REFERENCE" || ! -s "$ATTACHMENTS" ]]; then
+    echo "Initializing new 20-minute baseline fitness reference..."
+
+    "$PYTHON_BIN" - "$DATASET/baseline_00000" "$SPATIAL" "$REFERENCE" <<'PY'
+from pathlib import Path
+import sys
+
+from optimization import inspect_fitness as settings
+from optimization.fitness import evaluate_scenario
+
+baseline, spatial, reference = map(Path, sys.argv[1:4])
+
+evaluate_scenario(
+    baseline,
+    spatial,
+    reference,
+    baseline_name="baseline_00000",
+    mode_weights=settings.MODE_WEIGHTS,
+    time_weights=settings.TIME_WEIGHTS,
+    level=settings.SUFFICIENCY_LEVEL,
+    hour_start=settings.HOUR_START,
+    linkstats_statistic=settings.LINKSTATS_STATISTIC,
+    bike_speed_m_s=settings.BIKE_SPEED_M_S,
+    pt_transfer_penalty_s=settings.PT_TRANSFER_PENALTY_S,
+    origin_snap_m=settings.ORIGIN_SNAP_M,
+    job_snap_m=settings.JOB_SNAP_M,
+)
+PY
+fi
+
+[[ -s "$REFERENCE" ]] || {
+    echo "Baseline reference initialization failed" >&2
+    exit 1
+}
+
+[[ -s "$ATTACHMENTS" ]] || {
+    echo "Baseline origin mask initialization failed" >&2
+    exit 1
+}
 if [[ "$EVALUATION" != *.zip ]]; then
     [[ -s "$EVALUATION/summary.json" ]] || { echo "Missing test evaluation summary" >&2; exit 1; }
     [[ -d "$EVALUATION/predictions" ]] || { echo "Missing saved test predictions" >&2; exit 1; }
