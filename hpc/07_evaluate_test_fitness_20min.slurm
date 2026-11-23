@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
+#SBATCH --mem=2G
 #SBATCH --time=08:00:00
 #SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/fitness_20min_%j.out
 #SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/fitness_20min_%j.err
