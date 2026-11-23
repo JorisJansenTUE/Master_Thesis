@@ -28,7 +28,7 @@ from accessibility.calculations.plots import (
 
 # ------ Edit settings here (no CLI flags) ------
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RUN_DIR = PROJECT_ROOT / "data" / "Simulated_Runs_v2" / "corridor_00792"  
+RUN_DIR = PROJECT_ROOT / "data" / "Simulated_Runs_v2" / "baseline_00000"  
 SPATIAL_DIR = dest.spatial_dir()
 OUTPUT_DIR = dest.results_dir(RUN_DIR.name)
 
