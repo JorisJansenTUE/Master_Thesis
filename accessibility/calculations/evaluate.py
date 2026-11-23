@@ -30,6 +30,7 @@ def calculate_accessibility(
     pt_transfer_penalty_s: float = 300.0,
     origin_snap_m: float = 500.0,
     job_snap_m: float = 300.0,
+    linkstats_override: LinkTravelTimes | None = None,
 ) -> pd.DataFrame:
     """Return per-origin car/bike/PT opportunities using the actual scenario.
 
@@ -43,11 +44,16 @@ def calculate_accessibility(
     jobs = pd.read_csv(spatial_dir / "jobs.csv", dtype={"job_id": str})
     origin_ids = origins["hex_id"].astype(str).tolist()
 
-    linkstats = LinkTravelTimes.from_linkstats(
-        scenario_dir / "targets" / "linkstats.txt.gz",
-        hour_start=hour_start,
-        statistic=linkstats_statistic,
-    )
+    if linkstats_override is None:
+        linkstats = LinkTravelTimes.from_linkstats(
+            scenario_dir / "targets" / "linkstats.txt.gz",
+            hour_start=hour_start,
+            statistic=linkstats_statistic,
+        )
+    else:
+        linkstats = linkstats_override
+        if linkstats.hour_start != hour_start or linkstats.statistic != linkstats_statistic:
+            raise ValueError("Injected link travel times use a different hour or statistic")
     car, bike = load_road_networks(
         scenario_dir / "network.xml.gz", linkstats, bike_speed_m_s=bike_speed_m_s,
     )
