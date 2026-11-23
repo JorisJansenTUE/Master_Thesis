@@ -10,9 +10,9 @@ from preprocessing.utils import DATA_DIR, RAW_DIR
 # --------------------------------------------------
 # Settings
 # --------------------------------------------------
-NETWORK_BEFORE = Path(DATA_DIR / "NDA_Eth_Model" / "locarno" / "locarno_network.xml.gz")
+NETWORK_BEFORE = Path(DATA_DIR / "NDA_Eth_Model" / "Final_Baseline" / "locarno_network.xml.gz")
 #NETWORK_BEFORE = Path(RAW_DIR / "OSM" / "REV_width_tagged_buffered" / "REV_network_final.xml.gz")
-NETWORK_AFTER = Path(r"C:\Users\20201733\Downloads\output_network.xml.gz")
+NETWORK_AFTER = Path(DATA_DIR / "NDA_Eth_Model" / "Final_Baseline" / "output_network.xml.gz")
 
 OUTPUT = Path("calibration_comparison_new_v2.csv")
 
