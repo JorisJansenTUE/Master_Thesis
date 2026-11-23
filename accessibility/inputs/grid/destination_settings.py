@@ -49,7 +49,7 @@ def spatial_dir() -> Path:
 
 def results_dir(run_name: str) -> Path:
     suffix = "" if source_key() == "statent" else "_facilities"
-    return OUTPUT_ROOT / f"results_{run_name}{suffix}"
+    return OUTPUT_ROOT / "new_threshold" / f"results_{run_name}{suffix}"
 
 
 def baseline_reference_file(baseline_run_name: str = "baseline_00000") -> Path:
