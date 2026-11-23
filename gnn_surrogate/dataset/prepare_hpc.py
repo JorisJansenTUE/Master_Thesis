@@ -124,7 +124,7 @@ def _fixed_inputs(source: Path, output: Path, baseline: Path, hour: int) -> tupl
         "baseline_linkstats_sha256": _sha256(baseline / LINKSTATS_REL),
         "travel_time_hour": hour,
         "static_features": list(STATIC_FEATURES),
-        "target_representation": "road_travel_time_delta_v2",
+        "target_representation": "road_congestion_delay_delta_v1",
         "baseline_flow_window": "target_hour",
     }
     if provenance_path.exists():
@@ -136,6 +136,9 @@ def _fixed_inputs(source: Path, output: Path, baseline: Path, hour: int) -> tupl
             "gnn_inputs/fixed_inputs.npz", "gnn_inputs/input_metadata.json"
         )):
             raise ValueError("Fixed preprocessing artifacts are incomplete; use a NEW output directory")
+        with np.load(graph / "baseline_tt.npz", allow_pickle=False) as cache:
+            if "baseline_freeflow_s" not in cache:
+                raise ValueError("Missing baseline free-flow reference; use a NEW output directory")
         print("Reusing fixed graph and inputs (baseline hashes match)", flush=True)
     else:
         if graph.exists() or inputs.exists():
@@ -170,7 +173,8 @@ def _validate_pair(output: Path, scenario_id: str, n: int, hour: int) -> None:
             or not np.isfinite(x).all() or not np.isfinite(y).all()
             or d.get("scenario") != scenario_id or t.get("scenario") != scenario_id
             or len(d.get("feature_names", [])) != 9
-            or t.get("channels") != ["road"] or t.get("hour") != hour):
+            or t.get("channels") != ["road"] or t.get("hour") != hour
+            or t.get("target_type") != "road_congestion_delay_change"):
         raise ValueError(f"Invalid TT target/eligibility mask for {scenario_id}")
 
 

@@ -1,10 +1,10 @@
-"""Inspect one travel-time surrogate scenario and identify the worst links.
+"""Inspect reconstructed travel times from the congestion-delay surrogate.
 
 Run from the project root:
     python -m gnn_surrogate.evaluation.inspect_scenario
 
 Configure paths and SCENARIO_ID below; no command-line arguments required.
-Works with the road-only single-output travel-time surrogate.
+Works with the road-only congestion-delay-change surrogate.
 """
 from __future__ import annotations
 
@@ -17,13 +17,14 @@ import torch
 
 from gnn_surrogate.dataset.dataset import ScenarioDataset
 from gnn_surrogate.preprocessing.targets.target_tensors import _eligible_links
+from gnn_surrogate.evaluation.delay_reconstruction import reconstruct_road_travel_times
 
 
 # ---------------------------- LOCAL SETTINGS -------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-GNN_DIR = Path("/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt_road")
+GNN_DIR = Path("/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt_delay")
 SIMULATIONS_DIR = Path("/vast.mnt/home/20201733/locarno_ETH_Model/training_dataset_v4")
-RUN_TAG = "tt_road_001"
+RUN_TAG = "tt_delay_001"
 SCENARIO_ID = "corridor_00828"
 BASELINE_ID = "baseline_00000"
 CHECKPOINT = GNN_DIR / "runs" / RUN_TAG / "best.pt"
@@ -58,22 +59,36 @@ def load_prediction(dataset: ScenarioDataset) -> tuple[np.ndarray, np.ndarray, n
 
 def build_link_table(dataset: ScenarioDataset, pred: np.ndarray, truth: np.ndarray,
                      mask: np.ndarray, baseline: np.ndarray) -> pd.DataFrame:
+    """Build link-level diagnostics with correct total-travel-time reconstruction."""
     n, c = truth.shape
-    if pred.shape != (n, c) or mask.shape != (n, c) or baseline.shape != (n, c):
-        raise ValueError("Predictions, targets, mask and references have different shapes")
-
-    valid = mask.reshape(-1)
+    if c != 1 or pred.shape != (n, 1) or mask.shape != (n, 1) or baseline.shape != (n, 1):
+        raise ValueError("Road-only prediction, target, mask, and baseline must be [N,1]")
+    with np.load(GNN_DIR / "gnn_static" / "baseline_tt.npz", allow_pickle=False) as cache:
+        baseline_ff = cache["baseline_freeflow_s"]
+        if int(cache["hour"]) != dataset.hour:
+            raise ValueError("Baseline free-flow hour mismatch")
+    x_dynamic = dataset[0]["x_dynamic"].numpy()
+    reconstruction = reconstruct_road_travel_times(
+        baseline, baseline_ff, x_dynamic, dataset.dynamic_feature_names,
+        pred, mask, actual_delay_delta_s=truth,
+    )
+    valid = mask[:, 0]
     rows = pd.DataFrame({
-        "node_id": np.repeat(np.arange(n), c)[valid],
-        "channel": np.tile(np.arange(c), n)[valid],
-        "channel_name": np.tile(dataset.target_channels, n)[valid],
-        "baseline_tt_s": baseline.reshape(-1)[valid],
-        "actual_delta_s": truth.reshape(-1)[valid],
-        "predicted_delta_s": pred.reshape(-1)[valid],
+        "node_id": np.arange(n)[valid],
+        "channel": 0,
+        "channel_name": "road",
+        "baseline_tt_s": baseline[valid, 0],
+        "baseline_freeflow_tt_s": baseline_ff[valid, 0],
+        "actual_delay_change_s": truth[valid, 0],
+        "predicted_delay_change_s": pred[valid, 0],
+        "freeflow_change_s": reconstruction["freeflow_change_s"][valid, 0],
+        "scenario_freeflow_reconstructed_s": reconstruction["scenario_freeflow_s"][valid, 0],
+        "actual_delta_s": reconstruction["actual_total_delta_s"][valid, 0],
+        "predicted_delta_s": reconstruction["predicted_total_delta_s"][valid, 0],
+        "actual_tt_s": reconstruction["actual_tt_s"][valid, 0],
+        "predicted_tt_s": reconstruction["predicted_tt_s"][valid, 0],
     })
-    rows["actual_tt_s"] = rows.baseline_tt_s + rows.actual_delta_s
-    rows["predicted_tt_s"] = rows.baseline_tt_s + rows.predicted_delta_s
-    rows["error_s"] = rows.predicted_delta_s - rows.actual_delta_s
+    rows["error_s"] = rows.predicted_tt_s - rows.actual_tt_s
     rows["abs_error_s"] = rows.error_s.abs()
     rows["squared_error_s2"] = rows.error_s ** 2
 
@@ -81,18 +96,17 @@ def build_link_table(dataset: ScenarioDataset, pred: np.ndarray, truth: np.ndarr
                         dtype={"segment_id": str, "from_node": str, "to_node": str})
     rows = rows.merge(nodes[["node_id", "segment_id", "from_node", "to_node",
                              "mid_x", "mid_y", "osm_way_id"]],
-                      on="node_id", how="left", validate="many_to_one")
+                      on="node_id", how="left", validate="one_to_one")
 
-    # Use the SAME network/linkstats eligibility mapping as target preprocessing.
     scenario = SIMULATIONS_DIR / SCENARIO_ID
     eligible = _eligible_links(nodes, scenario, dataset.hour)
     eligible = eligible[["node_id", "link_id", "tt_s", "FREESPEED"]]
     rows = rows.merge(eligible, on="node_id", how="left", validate="one_to_one")
     if rows.link_id.isna().any():
-        raise ValueError("Eligible target could not be mapped back to a MATSim link")
-    diff = (rows.actual_tt_s - rows.tt_s).abs().max()
-    if diff > 0.01:
-        raise ValueError(f"Linkstats does not match preprocessed target: max difference {diff:.3f} s")
+        raise ValueError("Eligible target not found in MATSim link mapping")
+    if (rows.actual_tt_s - rows.tt_s).abs().max() > 0.02:
+        raise ValueError("Reconstructed MATSim scenario time differs from linkstats; "
+                         "check free-flow-change inputs and mapping")
 
     hour = dataset.hour
     volume_col = f"HRS{hour}-{hour+1}avg"
@@ -101,10 +115,12 @@ def build_link_table(dataset: ScenarioDataset, pred: np.ndarray, truth: np.ndarr
     rows = rows.merge(stats, left_on="link_id", right_on="LINK", how="left",
                       validate="one_to_one")
     rows["freeflow_tt_s"] = rows.LENGTH / rows.FREESPEED
+    if (rows.scenario_freeflow_reconstructed_s - rows.freeflow_tt_s).abs().max() > 0.02:
+        raise ValueError("Dynamic free-speed change does not reconstruct scenario "
+                         "free-flow times. Evaluate from MATSim scenario geometry instead.")
     rows = rows.rename(columns={volume_col: "hourly_volume_avg",
                                 "CAPACITY": "scenario_capacity"}).drop(columns=["LINK", "tt_s"])
 
-    # Compare the actual baseline road linkstats with the cached reference.
     rows["baseline_ref_link_id"] = rows.link_id
     base_stats = pd.read_csv(SIMULATIONS_DIR / BASELINE_ID / "targets" / "linkstats.txt.gz",
                              sep="\t", dtype={"LINK": str},
@@ -118,11 +134,9 @@ def build_link_table(dataset: ScenarioDataset, pred: np.ndarray, truth: np.ndarr
     rows = rows.merge(base_stats, on="baseline_ref_link_id", how="left",
                       validate="many_to_one")
     if rows.baseline_linkstats_tt_s.isna().any():
-        raise ValueError("Baseline linkstats missing for one or more eligible links")
-    if (rows.baseline_linkstats_tt_s - rows.baseline_tt_s).abs().max() > 0.01:
-        raise ValueError("Baseline linkstats do not match cached reference travel times")
-    rows["baseline_freeflow_tt_s"] = rows.baseline_length_m / rows.baseline_freespeed_m_s
-    rows["freeflow_change_s"] = rows.freeflow_tt_s - rows.baseline_freeflow_tt_s
+        raise ValueError("Baseline linkstats missing for eligible road links")
+    if (rows.baseline_linkstats_tt_s - rows.baseline_tt_s).abs().max() > 0.02:
+        raise ValueError("Baseline linkstats and cache do not agree")
     rows["volume_change_avg"] = rows.hourly_volume_avg - rows.baseline_volume_avg
     rows["actual_delay_s"] = rows.actual_tt_s - rows.freeflow_tt_s
     rows["predicted_delay_s"] = rows.predicted_tt_s - rows.freeflow_tt_s
@@ -134,7 +148,7 @@ def build_link_table(dataset: ScenarioDataset, pred: np.ndarray, truth: np.ndarr
             str(intervention["intervention_type"])
         )
     rows["intervention"] = rows.segment_id.map(
-        lambda s: ",".join(sorted(by_segment.get(str(s), set())))
+        lambda seg: ",".join(sorted(by_segment.get(str(seg), set())))
     )
     rows["directly_modified"] = rows.intervention.ne("")
     return rows.sort_values("squared_error_s2", ascending=False)
@@ -153,6 +167,7 @@ def report(rows: pd.DataFrame, hour: int) -> dict:
             "mae_s": float(np.abs(err).mean()),
             "rmse_s": float(np.sqrt(np.mean(err ** 2))),
             "no_change_rmse_s": float(np.sqrt(np.mean(actual ** 2))),
+            "unchanged_delay_rmse_s": float(np.sqrt(np.mean(group.actual_delay_change_s.to_numpy(dtype=float) ** 2))),
             "r2_delta": float(1 - ss / sst) if sst > 0 else None,
             "mean_error_s": float(err.mean()),
             "top_1_link_share_of_squared_error_pct": float(100 * group.squared_error_s2.iloc[0] / ss) if ss > 0 else 0.0,
@@ -215,6 +230,9 @@ def main() -> None:
         if not required.is_file():
             raise FileNotFoundError(f"Missing {required} (change settings at top)")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    target_meta = json.loads((GNN_DIR / "targets" / SCENARIO_ID / "target_metadata.json").read_text())
+    if target_meta.get("target_type") != "road_congestion_delay_change":
+        raise ValueError("Inspector requires congestion-delay targets, not total-time changes")
     data = ScenarioDataset(GNN_DIR / "gnn_static", GNN_DIR / "gnn_inputs",
                            GNN_DIR / "dynamic", GNN_DIR / "targets", [SCENARIO_ID])
     pred, truth, mask, baseline = load_prediction(data)

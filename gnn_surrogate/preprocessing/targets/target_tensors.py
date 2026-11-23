@@ -1,7 +1,8 @@
-"""One-hour general-road travel-time-change targets on the fixed directed graph.
+"""One-hour general-road congestion-delay-change targets on the fixed graph.
 
-Predicts only motor-road ('car') links. Bus-specific *_spec, bicycle and rail
-links remain in the graph for structure but have no travel-time target.
+Delay is measured linkstats travel time minus the SAME network's linkstats
+free-flow time (LENGTH/FREESPEED). The model predicts scenario minus
+baseline delay, not total travel-time change. Eligibility is unchanged.
 """
 from __future__ import annotations
 
@@ -84,7 +85,7 @@ def _eligible_links(nodes: pd.DataFrame, scenario: Path, hour: int) -> pd.DataFr
 
     col = f"TRAVELTIME{hour}-{hour+1}avg"
     stats = pd.read_csv(scenario / "targets" / "linkstats.txt.gz", sep="\t",
-                        usecols=["LINK", "FREESPEED", col], dtype={"LINK": str})
+                        usecols=["LINK", "LENGTH", "FREESPEED", col], dtype={"LINK": str})
     if stats.LINK.isna().any() or stats.LINK.duplicated().any():
         raise ValueError("Missing or duplicate LINK in linkstats")
     result = result.merge(stats, left_on="link_id", right_on="LINK",
@@ -92,34 +93,47 @@ def _eligible_links(nodes: pd.DataFrame, scenario: Path, hour: int) -> pd.DataFr
     if result.LINK.isna().any():
         raise ValueError("Eligible MATSim links missing from linkstats")
     speed = result.FREESPEED.to_numpy(dtype=np.float64)
+    length = result.LENGTH.to_numpy(dtype=np.float64)
     if not (np.isfinite(speed) & (speed > 0)).all():
         raise ValueError("Car-accessible road link has nonfinite or nonpositive speed")
+    if not (np.isfinite(length) & (length > 0)).all():
+        raise ValueError("Car-accessible road link has nonfinite or nonpositive length")
     tt = result[col].to_numpy(dtype=np.float64)
     if not np.isfinite(tt).all() or (tt <= 0).any():
         raise ValueError("Eligible road link has nonfinite or nonpositive travel time")
-    return result.rename(columns={col: "tt_s"})
+    result = result.rename(columns={col: "tt_s"})
+    result["freeflow_s"] = length / speed
+    return result
 
 
 def build_baseline_travel_times(nodes: pd.DataFrame, baseline: Path,
-                                hour: int = 8) -> tuple[np.ndarray, np.ndarray]:
-    """Baseline road travel time and presence, both [N,1], built once."""
+                                hour: int = 8) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Baseline road TT, presence and free-flow TT, all [N,1], built once."""
     eligible = _eligible_links(nodes, baseline, hour)
     values = np.zeros((len(nodes), 1), dtype=np.float32)
     present = np.zeros((len(nodes), 1), dtype=bool)
+    freeflow = np.zeros((len(nodes), 1), dtype=np.float32)
     for row in eligible.itertuples(index=False):
         i = int(row.node_id)
         values[i, 0] = float(row.tt_s)
+        freeflow[i, 0] = float(row.freeflow_s)
         present[i, 0] = True
-    return values, present
+    return values, present, freeflow
 
 
 def build_delta_targets(nodes: pd.DataFrame, scenario: Path,
                         baseline_tt: np.ndarray, baseline_present: np.ndarray,
+                        baseline_freeflow: np.ndarray,
                         hour: int = 8) -> tuple[np.ndarray, np.ndarray, dict]:
-    """Return signed road travel-time changes [N,1] and eligibility mask [N,1]."""
+    """Return signed *congestion-delay* changes [N,1] and eligibility mask."""
     n = len(nodes)
-    if baseline_tt.shape != (n, 1) or baseline_present.shape != (n, 1):
+    if any(arr.shape != (n, 1) for arr in
+           (baseline_tt, baseline_present, baseline_freeflow)):
         raise ValueError("Baseline travel-time tensors must be [N,1]")
+    if (not np.isfinite(baseline_tt).all()
+            or not np.isfinite(baseline_freeflow).all()
+            or (baseline_freeflow[baseline_present] <= 0).any()):
+        raise ValueError("Invalid baseline travel-time/free-flow reference")
     eligible = _eligible_links(nodes, scenario, hour)
     delta = np.zeros((n, 1), dtype=np.float32)
     valid = np.zeros((n, 1), dtype=bool)
@@ -132,7 +146,9 @@ def build_delta_targets(nodes: pd.DataFrame, scenario: Path,
         i = int(row.node_id)
         if not baseline_present[i, 0] or baseline_ids.get(row.link_id) != i:
             raise ValueError(f"General road link lacks matching baseline: {row.link_id}")
-        delta[i, 0] = float(row.tt_s) - baseline_tt[i, 0]
+        scenario_delay = float(row.tt_s) - float(row.freeflow_s)
+        baseline_delay = float(baseline_tt[i, 0]) - float(baseline_freeflow[i, 0])
+        delta[i, 0] = scenario_delay - baseline_delay
         valid[i, 0] = True
     if not valid.any():
         raise ValueError("No eligible general-road targets")

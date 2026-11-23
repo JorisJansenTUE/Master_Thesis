@@ -1,5 +1,5 @@
 #!/bin/bash -l
-#SBATCH --job-name=locarno-gnn-train
+#SBATCH --job-name=locarno-gnn-train-delay
 #SBATCH --partition=tue.gpu2.q,tue.gpu3.q
 #SBATCH --gpus=1
 #SBATCH --nodes=1
@@ -8,16 +8,16 @@
 #SBATCH --mem=16G
 #SBATCH --gpus=1
 #SBATCH --time=18:00:00
-#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_train_%j.out
-#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_train_%j.err
+#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis_delay/slurm_logs/gnn_train_%j.out
+#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis_delay/slurm_logs/gnn_train_%j.err
 set -Eeuo pipefail
 
-PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis
-GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt_road}"
-VENV="${VENV:-$PROJECT_ROOT/.venv-gnn}"
+PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis_delay
+GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt_delay}"
+VENV="${VENV:-/vast.mnt/home/20201733/Master_Thesis/.venv-gnn}"
 EPOCHS="${EPOCHS:-150}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
-RUN_TAG="${RUN_TAG:-tt_road_001}"
+RUN_TAG="${RUN_TAG:-tt_delay_001}"
 RUN_DIR="$GNN_DATA/runs/$RUN_TAG"
 
 module purge
