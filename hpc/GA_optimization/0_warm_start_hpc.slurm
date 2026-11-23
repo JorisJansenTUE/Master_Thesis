@@ -4,10 +4,10 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=32G
-#SBATCH --time=06:00:00
-#SBATCH --output=ga-warmstart_%j.out
-#SBATCH --error=ga-warmstart_%j.err
+#SBATCH --mem=4G
+#SBATCH --time=05:00:00
+#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/ga-warmstart_%j.out
+#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/ga-warmstart_%j.err
 
 set -Eeuo pipefail
 source "$SLURM_SUBMIT_DIR/hpc/GA_optimization/hpc_config.sh"
@@ -44,7 +44,18 @@ for file, field in ((reference, "reference_sha256"), (mask, "baseline_attachment
     assert file.is_file(), f"Missing original reference {file}; set WARM_REBUILD=1"
     assert hashlib.sha256(file.read_bytes()).hexdigest() == data[field], f"Existing warm-start {field} differs; set WARM_REBUILD=1"
 PY_CHECK
-    echo "Warm start already exists and matches baseline/budget/fitness: $WARM_START_FILE"
+    # A file from before test-exclusion cannot be silently reused.
+    "$PYTHON_BIN" - "$WARM_START_FILE" "$WARM_EXCLUDE_TEST_SPLIT" <<'PY_SPLIT'
+import hashlib, json, sys
+from pathlib import Path
+seed, split = (Path(x) for x in sys.argv[1:])
+assert seed.is_file() and split.is_file(), 'Missing warm-start or frozen test split'
+a = json.loads(seed.read_text())
+assert a.get('excluded_test_split_sha256') == hashlib.sha256(split.read_bytes()).hexdigest(), (
+    'Warm start does not match current held-out test split; set WARM_REBUILD=1'
+)
+PY_SPLIT
+    echo "Warm start already exists and matches baseline/budget/fitness/test exclusion: $WARM_START_FILE"
     exit 0
 fi
 
@@ -65,6 +76,7 @@ ARGS=(
   --max-overlap "$WARM_MAX_OVERLAP"
   --limit "$WARM_LIMIT"
   --workers "${SLURM_CPUS_PER_TASK:-1}"
+  --exclude-test-split "$WARM_EXCLUDE_TEST_SPLIT"
 )
 if [[ "$WARM_EXISTING_ONLY" == 1 ]]; then ARGS+=(--existing-only); fi
 "$PYTHON_BIN" -m optimization.warm_start "${ARGS[@]}"

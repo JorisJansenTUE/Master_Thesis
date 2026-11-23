@@ -204,11 +204,23 @@ def build_warm_start(
     dataset: Path, output: Path, spatial_dir: Path, reference_file: Path,
     *, count: int, budget_m: float, max_overlap: float, limit: int = 0,
     existing_only: bool = False, workers: int = 1,
+    exclude_test_split: Path | None = None,
 ) -> dict:
     """Score historical completed scenarios and export valid, diverse GA seeds."""
     if workers < 1:
         raise ValueError("workers must be at least 1")
     dataset = dataset.resolve(strict=True)
+    excluded = set()
+    excluded_sha256 = None
+    if exclude_test_split is not None:
+        split_path = exclude_test_split.resolve(strict=True)
+        split_data = _read_json(split_path)
+        test_ids = split_data.get('test')
+        if not isinstance(test_ids, list) or not test_ids or len(test_ids) != len(set(test_ids)):
+            raise ValueError(f'Invalid frozen GNN test split: {split_path}')
+        excluded = set(test_ids)
+        excluded_sha256 = hashlib.sha256(split_path.read_bytes()).hexdigest()
+        print(f'Excluding {len(excluded)} held-out GNN test scenarios from GA warm start', flush=True)
     baseline_dir = dataset / BASELINE_NAME
     baseline_metadata = _read_json(baseline_dir / "scenario.json")
     if not baseline_metadata.get("baseline_hashes"):
@@ -231,6 +243,9 @@ def build_warm_start(
     warnings_shown = 0
     for path in paths:
         try:
+            if path.name in excluded:
+                skips['held-out GNN test scenario'] += 1
+                continue
             metadata = _read_json(path / "scenario.json")
             if metadata.get("baseline_hashes") != baseline_metadata.get("baseline_hashes"):
                 skips["different baseline"] += 1
@@ -342,6 +357,8 @@ def build_warm_start(
 
     payload = {
         "version": 1, "fitness_version": FITNESS_VERSION,
+        "excluded_test_split_sha256": excluded_sha256,
+        "excluded_test_scenarios_count": len(excluded),
         "source_dataset": str(dataset), "baseline_name": BASELINE_NAME,
         "baseline_hashes": baseline_metadata.get("baseline_hashes"),
         "reference_sha256": hashlib.sha256(reference_file.read_bytes()).hexdigest(),
@@ -392,6 +409,8 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=0, help="Scoring pilot: process only first N eligible scenarios (0=all)")
     parser.add_argument("--existing-only", action="store_true",
                         help="Only rescore scenarios with saved accessibility CSVs; do not route")
+    parser.add_argument("--exclude-test-split", type=Path, default=None,
+                        help="splits.json with frozen test IDs to exclude from historical GA seeds")
     parser.add_argument("--workers", type=int, default=1,
                         help="Parallel historical accessibility processes (default: 1)")
     args = parser.parse_args()
@@ -400,7 +419,8 @@ def main() -> None:
     build_warm_start(args.dataset, args.output, args.spatial_dir, args.reference,
                      count=args.count, budget_m=args.budget,
                      max_overlap=args.max_overlap, limit=args.limit,
-                     existing_only=args.existing_only, workers=args.workers)
+                     existing_only=args.existing_only, workers=args.workers,
+                     exclude_test_split=args.exclude_test_split)
 
 
 if __name__ == "__main__":

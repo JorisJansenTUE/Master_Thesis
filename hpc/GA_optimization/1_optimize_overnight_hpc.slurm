@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=6G
-#SBATCH --time=08:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=ga-overnight_%j.out
 #SBATCH --error=ga-overnight_%j.err
 
@@ -39,6 +39,25 @@ echo "Worktree:       $HPC_REPO"
 echo "GA output:      $GA_DATASET"
 echo "Warm start:     $WARM_START_FILE"
 echo "Parallel MATSim: $GA_MAX_PARALLEL | Budget: $GA_BUDGET_M m"
+echo "Population: $GA_POPULATION | Generations: $GA_GENERATIONS (including generation 0)"
+echo "MATSim last iteration: $GA_LAST_ITERATION | Linkstats: $GA_LINKSTATS_INTERVAL/$GA_LINKSTATS_AVERAGE_ITERATIONS"
+# Reject inconsistent MATSim settings before submitting hundreds of simulations.
+"$PYTHON_BIN" - "$HISTORICAL_BASELINE/run_status.json" <<'PY_BASELINE'
+import json, os, sys
+from pathlib import Path
+status = json.loads(Path(sys.argv[1]).read_text())
+expected = {
+    'last_iteration': int(os.environ['GA_LAST_ITERATION']),
+    'linkstats_interval': int(os.environ['GA_LINKSTATS_INTERVAL']),
+    'linkstats_average_iterations': int(os.environ['GA_LINKSTATS_AVERAGE_ITERATIONS']),
+}
+for name, value in expected.items():
+    actual = status.get(name)
+    if actual is None:
+        print(f'WARNING: baseline run_status.json does not record {name}; confirm settings manually')
+    elif int(actual) != value:
+        raise SystemExit(f'Baseline {name}={actual} differs from GA worker {value}; change GA settings before running')
+PY_BASELINE
 
 "$PYTHON_BIN" -m optimization.hpc_overnight \
   --repo "$HPC_REPO" \

@@ -23,13 +23,39 @@ import time
 
 STATE_FILE = "optimization_state.json"
 ACTIVE_FILE = "hpc_active_array.json"
-EIGHT_HOURS_S = 8 * 3600
+DEFAULT_JOB_WALLTIME_S = 24 * 3600  # fallback outside SLURM only
 # Stop monitoring before SLURM sends SIGTERM, allowing a clean final log.
 HARD_EXIT_BUFFER_S = 180
 
 
 def log(msg: str) -> None:
     print(f"[{datetime.now(timezone.utc).isoformat(timespec='seconds')}] {msg}", flush=True)
+
+
+def actual_job_walltime_s() -> int:
+    """Use the effective Slurm allocation, including sbatch --time overrides.
+
+    SLURM_TIMELIMIT is provided in minutes by Slurm. In non-Slurm tests,
+    fall back to 24h rather than claiming an artificial 8-hour deadline.
+    """
+    raw = os.environ.get('SLURM_TIMELIMIT')
+    if not raw:
+        return DEFAULT_JOB_WALLTIME_S
+    if raw.isdecimal():
+        return int(raw) * 60
+    # Some Slurm installations export a formatted timelimit.
+    day, sep, clock = raw.partition('-')
+    days = int(day) if sep else 0
+    clock = clock if sep else raw
+    fields = [int(x) for x in clock.split(':')]
+    if len(fields) == 2:
+        hours, minutes = fields
+        seconds = 0
+    elif len(fields) == 3:
+        hours, minutes, seconds = fields
+    else:
+        raise ValueError(f'Cannot interpret SLURM_TIMELIMIT={raw!r}')
+    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
 
 
 def read_json(path: Path) -> dict:
@@ -82,6 +108,7 @@ def init_command(args: argparse.Namespace) -> list[str]:
         "--dataset", str(args.dataset),
         "--baseline", str(args.baseline),
         "--warm-start", str(args.warm_start),
+        "--matsim-jar", str(args.jar),
         "--reference", str(args.reference),
         "--spatial-dir", str(args.spatial_dir),
         "--population", str(args.population),
@@ -144,18 +171,19 @@ def main() -> None:
     args = p.parse_args()
     if args.max_parallel < 1 or args.poll_sec < 1 or args.stop_margin_min < 5:
         p.error("max-parallel/poll-sec must be positive and stop margin >=5 minutes")
-    if args.stop_margin_min * 60 + HARD_EXIT_BUFFER_S >= EIGHT_HOURS_S:
-        p.error("stop margin too large")
+    job_walltime_s = actual_job_walltime_s()
+    if args.stop_margin_min * 60 + HARD_EXIT_BUFFER_S >= job_walltime_s:
+        p.error(f"stop margin too large for SLURM walltime ({job_walltime_s / 3600:g} hours)")
     if args.population < 2 or args.generations < 1:
         p.error("population>=2 and generations>=1 required")
 
     args.dataset.mkdir(parents=True, exist_ok=True)
     state_path = args.dataset / STATE_FILE
     active_path = args.dataset / ACTIVE_FILE
-    hard_deadline = time.monotonic() + EIGHT_HOURS_S - HARD_EXIT_BUFFER_S
+    hard_deadline = time.monotonic() + job_walltime_s - HARD_EXIT_BUFFER_S
     submit_deadline = hard_deadline - args.stop_margin_min * 60
-    log(f"Starting/restarting GA overnight, submitting until ~{args.stop_margin_min} min "
-        "before final SLURM walltime")
+    log(f"Starting/restarting GA, SLURM walltime={job_walltime_s / 3600:g}h; "
+        f"submitting until ~{args.stop_margin_min} min before walltime")
 
     if not state_path.is_file():
         init = init_command(args)

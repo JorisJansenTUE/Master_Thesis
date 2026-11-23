@@ -12,9 +12,11 @@ HISTORICAL_DATASET="${HISTORICAL_DATASET:-$BASE/training_dataset_v4}"
 HISTORICAL_BASELINE="${HISTORICAL_BASELINE:-$HISTORICAL_DATASET/baseline_00000}"
 
 # New optimisation results, separate from the historical dataset and Git tree.
-GA_DATASET="${GA_DATASET:-$BASE/GA_Optimization}"
+# Isolate the new run from prior 15-minute/linear-fitness GA checkpoints.
+GA_DATASET="${GA_DATASET:-$BASE/GA_Optimization/ga_20min_park5_15km_run01}"
 WARM_START_FILE="${WARM_START_FILE:-$GA_DATASET/warm_start.json}"
-REFERENCE_FILE="${REFERENCE_FILE:-$GA_DATASET/references/sufficiency_reference_15min.json}"
+# Reuse the already generated 20-minute/5-minute baseline reference (outside run directory).
+REFERENCE_FILE="${REFERENCE_FILE:-$BASE/GA_Optimization/references/sufficiency_reference_20min_park5.json}"
 
 # Transfer spatial inputs produced by the local accessibility package here:
 # origins.csv, jobs.csv, pt_origin_connectors.csv, pt_job_connectors.csv.
@@ -30,7 +32,7 @@ PYTHON_BIN="${PYTHON_BIN:-/home/20201733/Master_Thesis/.venv_hpc/bin/python}"
 
 # Identical optimisation and warm-start budget (prevents the budget mismatch).
 GA_BUDGET_M="${GA_BUDGET_M:-15000}"
-WARM_COUNT="${WARM_COUNT:-16}"
+WARM_COUNT="${WARM_COUNT:-8}"
 WARM_MAX_OVERLAP="${WARM_MAX_OVERLAP:-0.70}"
 # 0 = all historical candidates; set e.g. 20 for a quick pilot.
 WARM_LIMIT="${WARM_LIMIT:-0}"
@@ -38,10 +40,13 @@ WARM_LIMIT="${WARM_LIMIT:-0}"
 WARM_EXISTING_ONLY="${WARM_EXISTING_ONLY:-0}"
 # 1 = explicitly rebuild warm_start.json if it exists.
 WARM_REBUILD="${WARM_REBUILD:-0}"
+# Prevent the GA warm start from selecting scenarios in the frozen GNN test set.
+# Specify another splits.json if your GNN data directory differs.
+WARM_EXCLUDE_TEST_SPLIT="${WARM_EXCLUDE_TEST_SPLIT:-$BASE/gnn_training_tt_delay/splits.json}"
 
 GA_POPULATION="${GA_POPULATION:-80}"
-# Upper bound over ALL nights. The eight-hour SLURM walltime is a separate cap.
-GA_GENERATIONS="${GA_GENERATIONS:-100}"
+# GA generations, INCLUDING generation zero; not MATSim's 100 simulation iterations.
+GA_GENERATIONS="${GA_GENERATIONS:-80}"
 GA_SEED="${GA_SEED:-42}"
 GA_ELITES="${GA_ELITES:-2}"
 GA_IMMIGRANTS="${GA_IMMIGRANTS:-0.10}"
@@ -51,10 +56,16 @@ GA_DELETE_RAW="${GA_DELETE_RAW:-1}"
 # 1 = explicitly assign -1 fitness to failed MATSim jobs and continue.
 # Unreported/missing completions still stop the orchestrator for investigation.
 GA_PENALIZE_FAILED="${GA_PENALIZE_FAILED:-1}"
-# Leave time before SLURM's eight-hour hard limit for current arrays to finish.
+# Stop submitting before the actual SLURM walltime; active arrays may continue.
 GA_STOP_MARGIN_MIN="${GA_STOP_MARGIN_MIN:-45}"
 GA_POLL_SEC="${GA_POLL_SEC:-30}"
 # 1 = validate settings and preview init / submission without starting MATSim.
 GA_DRY_RUN="${GA_DRY_RUN:-0}"
+
+# Keep exactly comparable MATSim settings to historical baseline.
+GA_LAST_ITERATION="${GA_LAST_ITERATION:-100}"
+GA_LINKSTATS_INTERVAL="${GA_LINKSTATS_INTERVAL:-25}"
+GA_LINKSTATS_AVERAGE_ITERATIONS="${GA_LINKSTATS_AVERAGE_ITERATIONS:-5}"
+export GA_LAST_ITERATION GA_LINKSTATS_INTERVAL GA_LINKSTATS_AVERAGE_ITERATIONS
 
 export PYTHONPATH="$HPC_REPO${PYTHONPATH:+:$PYTHONPATH}"

@@ -28,7 +28,7 @@ REFERENCE="${REFERENCE:-$(dirname "$REFERENCE_FILE")/sufficiency_reference_20min
 OUTPUT="${OUTPUT:-$GNN_DATA/runs/$RUN_TAG/fitness_test_20min_park5_squared_carconstraint}"
 WORKERS="${WORKERS:-${SLURM_CPUS_PER_TASK:-8}}"
 LIMIT="${LIMIT:-0}"
-FLOOR="${FLOOR:-positive}"
+FLOOR="${FLOOR:-freeflow}"
 PLOTS="${PLOTS:-1}"
 RESUME="${RESUME:-0}"  # start clean; enable only for interruptions of this new run
 

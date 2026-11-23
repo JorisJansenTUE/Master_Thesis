@@ -55,9 +55,9 @@ if [[ "${1:-}" == "--worker" ]]; then
         --heap 4G \
         --initial-heap 1G \
         --reset-heap 3G \
-        --last-iteration 100 \
-        --linkstats-interval 25 \
-        --linkstats-average-iterations 5 \
+        --last-iteration "${GA_LAST_ITERATION:-100}" \
+        --linkstats-interval "${GA_LINKSTATS_INTERVAL:-25}" \
+        --linkstats-average-iterations "${GA_LINKSTATS_AVERAGE_ITERATIONS:-5}" \
         "${FLAGS[@]}"
     echo "[$(date -Is)] DONE GA scenario=$SCENARIO"
     exit 0
@@ -194,10 +194,10 @@ if (( N > 1000 )); then
 fi
 
 # Resource requests and the GA worker CLI flags above mirror the verified
-# dataset runner (2 CPUs, 6G, 30 minutes, 100 iterations, linkstats 25/5).
+# dataset runner (2 CPUs, 6G, 30 minutes). Simulation settings come from GA config.
 # Deliberately no changes to network_sampling/dataset/run_all_scenarios.sh.
 SBATCH_ARGS=(
-    --export="ALL,GA_REPO_ROOT=$REPO_ROOT"
+    --export="ALL,GA_REPO_ROOT=$REPO_ROOT,GA_LAST_ITERATION=${GA_LAST_ITERATION:-100},GA_LINKSTATS_INTERVAL=${GA_LINKSTATS_INTERVAL:-25},GA_LINKSTATS_AVERAGE_ITERATIONS=${GA_LINKSTATS_AVERAGE_ITERATIONS:-5}"
     --partition=mech-cst-mov.cpu.q
     --nodes=1
     --ntasks=1
@@ -215,6 +215,7 @@ if (( DELETE_RAW == 1 )); then WORKER_ARGS+=(--delete-raw); fi
 if (( DRY_RUN == 1 )); then
     echo "DRY RUN: would submit $N GA scenarios, max $MAX_PARALLEL in parallel"
     echo "SLURM resources: 2 CPUs, 6G RAM, 30 min/task (matching dataset runner)"
+    echo "MATSim settings: last_iteration=${GA_LAST_ITERATION:-100}, linkstats_interval=${GA_LINKSTATS_INTERVAL:-25}, average_iterations=${GA_LINKSTATS_AVERAGE_ITERATIONS:-5}"
     sed 's/^/  /' "$RUN_MANIFEST"
     echo "Raw MATSim output: $([[ "$DELETE_RAW" == 1 ]] && echo 'delete AFTER verified compaction' || echo 'retain')"
     exit 0
