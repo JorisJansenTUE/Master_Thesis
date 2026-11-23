@@ -14,12 +14,13 @@ From repository root:
       --out /.../gnn_training_tt_delay/runs/tt_delay_001/fitness_test \
       --workers 2 --plots
 
-Important: GNN predicts ONLY car-eligible ordinary road links. For non-car bus
-links, no scenario-level MATSim experienced times enter the PREDICTED branch:
-we use baseline experienced time when free-flow geometry remains unchanged,
-otherwise scenario free-flow. *_spec uses scenario free-flow by existing PT code.
-This fallback is an approximation, not a second bus-delay predictor. Both
-branches use the same scenario network and fixed spatial data.
+Important: the saved target/linkstats provides observed times only for
+car-eligible road links. For BOTH fitness branches, all non-car network links
+(including pt_* connectors and bus-only *_spec links) use the scenario network
+free-flow time. A pt_* connector with infinite free speed has ZERO time.
+Only car-link times differ between the MATSim and GNN accessibility calls.
+This is a deliberately car-only MATSim reference, NOT a validation of observed
+PT vehicle congestion or public transport timetables.
 """
 from __future__ import annotations
 
@@ -42,7 +43,8 @@ import pandas as pd
 from accessibility.calculations.evaluate import calculate_accessibility
 from accessibility.calculations.sufficiency import SufficiencyReference, assess_sufficiency
 from accessibility.inputs.links.linkstats import LinkTravelTimes
-from gnn_surrogate.preprocessing.targets.target_tensors import _eligible_links, _read_network_modes
+from accessibility.inputs.links.network import _load_matsim_network
+from gnn_surrogate.preprocessing.targets.target_tensors import _eligible_links
 from optimization.fitness import (
     _baseline_mask_path, _load_or_create_baseline_mask, evaluate_scenario,
     score_sufficiency, FITNESS_VERSION,
@@ -91,11 +93,6 @@ def _sha(path: Path) -> str:
 
 
 @lru_cache(maxsize=2)
-def _baseline_times(path: str, hour: int, statistic: str) -> LinkTravelTimes:
-    return LinkTravelTimes.from_linkstats(path, hour_start=hour, statistic=statistic)
-
-
-@lru_cache(maxsize=2)
 def _graph_nodes(path: str) -> pd.DataFrame:
     return pd.read_csv(
         path, dtype={"segment_id": str, "from_node": str, "to_node": str,
@@ -123,16 +120,37 @@ def _prediction_data(evaluation: str, scenario: str) -> dict[str, np.ndarray]:
         return {k: f[k] for k in f.files}
 
 
-def _predicted_times(
-    scenario_dir: Path, nodes: pd.DataFrame, prediction: dict,
-    actual: LinkTravelTimes, baseline: LinkTravelTimes, *, floor: str,
-    strict_tolerance_s: float = 0.05,
-) -> tuple[LinkTravelTimes, dict]:
-    """Create a travel-time source with NO scenario experienced TT leakage.
+def _network_free_flow(link) -> float:
+    """Physical network free-flow TT; infinite speed means instantaneous travel.
 
-    Eligible road mapping comes from the same target builder used to construct
-    the evaluation .npz masks. Actual NPZ times are checked, not used as input
-    to the predicted side. Other links fall back to baseline or free flow.
+    Do not take these values from the car-only linkstats: PT and bus-special
+    links need to be reconstructed from the actual intervention network.
+    """
+    length, speed = float(link.length_m), float(link.freespeed_m_s)
+    if not math.isfinite(length) or length < 0:
+        raise ValueError(f"Invalid network length for {link.link_id}: {length}")
+    if math.isinf(speed) and speed > 0:
+        return 0.0
+    if not math.isfinite(speed) or speed <= 0:
+        raise ValueError(f"Invalid network free speed for {link.link_id}: {speed}")
+    tt = length / speed
+    if not math.isfinite(tt) or tt < 0:
+        raise ValueError(f"Invalid network free-flow time for {link.link_id}: {tt}")
+    return tt
+
+
+def _paired_times(
+    scenario_dir: Path, nodes: pd.DataFrame, prediction: dict,
+    actual: LinkTravelTimes, *, floor: str,
+    strict_tolerance_s: float = 0.05,
+) -> tuple[LinkTravelTimes, LinkTravelTimes, dict]:
+    """Build full-network times for reference and prediction without PT leakage.
+
+    MATSim branch: observed car TT + scenario-network non-car free flow.
+    GNN branch: predicted car TT + IDENTICAL non-car free flow.
+
+    The GNN target masks, car link IDs and observed target values must match
+    the original saved test data; no intervention network is reconstructed.
     """
     n = len(nodes)
     mask = np.asarray(prediction["valid_mask"])
@@ -143,6 +161,7 @@ def _predicted_times(
         raise ValueError("Incompatible prediction arrays or graph node count")
     if not np.isfinite(predicted[mask]).all() or not np.isfinite(actual_saved[mask]).all():
         raise ValueError("Nonfinite GNN/actual times on eligible road links")
+
     eligible = _eligible_links(nodes, scenario_dir, hour=actual.hour_start)
     ids = eligible["node_id"].to_numpy(dtype=np.int64)
     expected = np.zeros(n, dtype=bool)
@@ -150,78 +169,94 @@ def _predicted_times(
     if not np.array_equal(mask[:, 0], expected):
         raise ValueError("Saved prediction mask differs from scenario car-link mapping")
     observed = eligible["tt_s"].to_numpy(dtype=np.float64)
-    if not np.allclose(actual_saved[ids, 0], observed, atol=strict_tolerance_s, rtol=1e-5):
+    if not np.allclose(actual_saved[ids, 0], observed,
+                       atol=strict_tolerance_s, rtol=1e-5):
         delta = np.max(np.abs(actual_saved[ids, 0] - observed))
         raise ValueError(f"MATSim linkstats / stored GNN actual_tt mismatch: max {delta:.6g}s")
 
-    network = _read_network_modes(scenario_dir / "network.xml.gz")
+    raw = _load_matsim_network(scenario_dir / "network.xml.gz")
     car_link_set = set(eligible["link_id"].astype(str))
-    all_car = {lid for lid, (modes, _, _) in network.items() if "car" in modes}
-    if all_car != car_link_set:
-        raise ValueError(f"Car-link mapping incomplete: missing={sorted(all_car-car_link_set)[:5]}")
+    network_car = {link.link_id for link in raw.links if "car" in link.modes}
+    if network_car != car_link_set:
+        raise ValueError(
+            "Car-link mapping incomplete: "
+            f"missing={sorted(network_car-car_link_set)[:5]}, "
+            f"extra={sorted(car_link_set-network_car)[:5]}"
+        )
+    if any(lid.endswith("_spec") for lid in car_link_set):
+        raise ValueError("A bus-only *_spec link incorrectly allows car")
 
-    result: dict[str, float] = {}
-    below_freeflow = 0
-    adjusted_positive = 0
-    adjusted_freeflow = 0
+    # Assemble the full-network input independently of car-only linkstats.
+    true_times: dict[str, float] = {}
+    pred_times: dict[str, float] = {}
+    full_freeflow: dict[str, float] = {}
+    counts = {
+        "non_car_network_freeflow": 0,
+        "non_car_zero_pt_links": 0,
+        "non_car_spec_links": 0,
+        "non_car_other_zero_links": 0,
+    }
+    for link in raw.links:
+        lid = link.link_id
+        if lid in car_link_set:
+            tt = actual.travel_times_s.get(lid)
+            ff = actual.free_flow_times_s.get(lid)
+            if (tt is None or not math.isfinite(tt) or tt <= 0
+                    or ff is None or not math.isfinite(ff) or ff <= 0):
+                raise ValueError(f"Missing positive observed/free-flow car TT: {lid}")
+            true_times[lid] = float(tt)
+            full_freeflow[lid] = float(ff)
+        else:
+            ff = _network_free_flow(link)
+            if lid.endswith("_spec") and ff <= 0:
+                # Existing PTNetwork requires a positive cost for *_spec.
+                raise ValueError(f"Bus-special link {lid} has zero free-flow time")
+            if lid.startswith("pt_") and ff == 0:
+                counts["non_car_zero_pt_links"] += 1
+            elif ff == 0:
+                counts["non_car_other_zero_links"] += 1
+            else:
+                counts["non_car_network_freeflow"] += 1
+            if lid.endswith("_spec"):
+                counts["non_car_spec_links"] += 1
+            full_freeflow[lid] = ff
+            true_times[lid] = ff
+            pred_times[lid] = ff
+
+    below_freeflow = adjusted_positive = adjusted_freeflow = 0
     for row in eligible.itertuples(index=False):
-        lid, i = str(row.link_id), int(row.node_id)
-        tt = float(predicted[i, 0])
-        ff = actual.free_flow_times_s.get(lid)
-        if ff is None or not math.isfinite(ff) or ff <= 0:
-            raise ValueError(f"Missing scenario free-flow time for eligible link {lid}")
+        lid, idx = str(row.link_id), int(row.node_id)
+        tt = float(predicted[idx, 0])
+        ff = full_freeflow[lid]
         if tt < ff - 0.01:
             below_freeflow += 1
         if floor == "freeflow":
-            if tt < ff:
-                adjusted_freeflow += 1
+            adjusted_freeflow += int(tt < ff)
             tt = max(tt, ff)
-        else:
-            if tt <= 0.001:
-                adjusted_positive += 1
+        elif floor == "positive":
+            adjusted_positive += int(tt <= 0.001)
             tt = max(tt, 0.001)
-        result[lid] = tt
-
-    fallback = {"baseline": 0, "freeflow": 0, "zero_pt_connectors": 0,
-                "spec_links": 0, "noncar_with_no_positive_time": 0}
-    # Never use actual.travel_times_s for the PREDICTED branch.
-    for lid in network:
-        if lid in result:
-            continue
-        if lid.endswith("_spec"):
-            fallback["spec_links"] += 1
-            # PTNetwork reads free_flow_times_s for these links, so no
-            # experienced travel time is needed or allowed.
-            continue
-        if lid.startswith("pt_"):
-            invalid = actual.invalid_travel_times.get(lid)
-            if (invalid is not None and invalid.reason == "nonpositive"
-                    and invalid.raw_value.strip() and float(invalid.raw_value) == 0):
-                fallback["zero_pt_connectors"] += 1
-                # PTNetwork supports explicit zero-time pt_ connectors.
-                continue
-        ff = actual.free_flow_times_s.get(lid)
-        baseline_ff = baseline.free_flow_times_s.get(lid)
-        baseline_tt = baseline.travel_times_s.get(lid)
-        if (ff is not None and baseline_ff is not None and baseline_tt is not None
-                and math.isclose(ff, baseline_ff, abs_tol=1e-6, rel_tol=1e-6)):
-            result[lid] = float(baseline_tt)
-            fallback["baseline"] += 1
-        elif ff is not None and math.isfinite(ff) and ff > 0:
-            result[lid] = float(ff)
-            fallback["freeflow"] += 1
         else:
-            fallback["noncar_with_no_positive_time"] += 1
-            # Fail later only if PT routing actually requires this link.
+            raise ValueError(f"Unknown prediction floor: {floor}")
+        pred_times[lid] = tt
 
-    synthetic = replace(actual, travel_times_s=result, hourly_volumes={})
-    return synthetic, {
+    if set(true_times) != set(pred_times) or set(pred_times) != set(full_freeflow):
+        raise AssertionError("Incomplete paired full-network travel times")
+    # The supplied source may contain PT NaNs/zeros; our full travel times are
+    # explicitly derived from network free flow for these links, so do not
+    # propagate irrelevant linkstats-invalid flags into the routing inputs.
+    both = dict(free_flow_times_s=full_freeflow,
+                invalid_travel_times={}, hourly_volumes={})
+    reference = replace(actual, travel_times_s=true_times, **both)
+    surrogate = replace(actual, travel_times_s=pred_times, **both)
+    diagnostics = {
         "car_predicted_count": len(eligible),
         "raw_predicted_below_freeflow": below_freeflow,
         "clipped_to_positive": adjusted_positive,
         "clipped_to_freeflow": adjusted_freeflow,
-        "unpredicted_link_fallback": fallback,
+        "unpredicted_link_fallback": counts,
     }
+    return reference, surrogate, diagnostics
 
 
 def _calculate_and_score(
@@ -272,19 +307,15 @@ def _process_one(task: tuple[str, str, str, str, str, str, str, str]) -> dict:
         _baseline_mask_path(reference_file), pd.DataFrame(), reference_file,
         baseline_name, is_baseline=False,
     )
-    baseline = _baseline_times(
-        str(Path(dataset) / baseline_name / "targets" / "linkstats.txt.gz"),
-        settings.HOUR_START, settings.LINKSTATS_STATISTIC,
-    )
     actual = LinkTravelTimes.from_linkstats(
         scenario_dir / "targets" / "linkstats.txt.gz",
         hour_start=settings.HOUR_START, statistic=settings.LINKSTATS_STATISTIC,
     )
-    predicted, diagnostics = _predicted_times(
-        scenario_dir, nodes, prediction, actual, baseline, floor=floor,
+    actual_full, predicted, diagnostics = _paired_times(
+        scenario_dir, nodes, prediction, actual, floor=floor,
     )
     actual_score, actual_summary = _calculate_and_score(
-        scenario_dir, Path(spatial), actual, reference, baseline_mask,
+        scenario_dir, Path(spatial), actual_full, reference, baseline_mask,
     )
     predicted_score, predicted_summary = _calculate_and_score(
         scenario_dir, Path(spatial), predicted, reference, baseline_mask,
@@ -472,7 +503,7 @@ def main() -> None:
         "fitness_version": FITNESS_VERSION,
         "model_target": "road_congestion_delay_change",
         "prediction_floor": args.floor,
-        "non_car_prediction_fallback": "baseline_if_same_freeflow_else_freeflow",
+        "non_car_prediction_fallback": "network_freeflow_for_both_branches_v1",
         "reference_sha256": _sha(args.reference),
         "attachment_mask_sha256": _sha(_baseline_mask_path(args.reference)),
         "spatial_dir": str(args.spatial_dir.resolve()),
@@ -493,7 +524,13 @@ def main() -> None:
     config_file = args.out / "evaluation_config.json"
     if args.resume and config_file.is_file():
         if _json(config_file) != parameters:
-            raise ValueError("Existing output configuration differs. Use a new --out directory")
+            saved = list((args.out / "per_scenario").glob("*.json"))
+            if saved:
+                raise ValueError("Existing successful scenario checkpoints use a different "
+                                 "travel-time policy. Use a new --out directory")
+            print("Replacing obsolete evaluation configuration: no completed scenario "
+                  "checkpoints exist", flush=True)
+            _write_json(config_file, parameters)
     else:
         if args.resume and (args.out / "per_scenario").exists():
             raise ValueError("Existing checkpoints have no matching configuration")

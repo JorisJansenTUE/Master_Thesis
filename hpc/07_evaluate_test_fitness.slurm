@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --time=08:00:00
-#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis_delay/slurm_logs/fitness_test_%j.out
-#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis_delay/slurm_logs/fitness_test_%j.err
+#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/fitness_test_%j.out
+#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/fitness_test_%j.err
 set -Eeuo pipefail
 
 # Run AFTER 05_evaluate_gnn.slurm has saved --save-predictions for split=test.
