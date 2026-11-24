@@ -117,7 +117,7 @@ def init_command(args: argparse.Namespace) -> list[str]:
         "--seed", str(args.seed),
         "--elites", str(args.elites),
         "--immigrants", str(args.immigrants),
-    ]
+    ] + (["--no-warm-start"] if os.environ.get("GA_NO_WARM_START", "0") == "1" else [])
 
 
 def submission_command(args: argparse.Namespace, manifest: Path) -> list[str]:

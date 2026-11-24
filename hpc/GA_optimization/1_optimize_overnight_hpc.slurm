@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=6G
 #SBATCH --time=24:00:00
-#SBATCH --output=ga-overnight_%j.out
-#SBATCH --error=ga-overnight_%j.err
+#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/ga-overnight_%j.out
+#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/ga-overnight_%j.err
 
 set -Eeuo pipefail
 source "$SLURM_SUBMIT_DIR/hpc/GA_optimization/hpc_config.sh"
@@ -19,11 +19,14 @@ module load Java/25.36
 
 cd "$HPC_REPO"
 [[ -x "$PYTHON_BIN" ]] || { echo "Python not executable: $PYTHON_BIN" >&2; exit 1; }
-for f in "$WARM_START_FILE" "$REFERENCE_FILE" "$HISTORICAL_BASELINE/network.xml.gz" \
+for f in "$REFERENCE_FILE" "$HISTORICAL_BASELINE/network.xml.gz" \
          "$HISTORICAL_BASELINE/transit_schedule.xml.gz" "$HISTORICAL_BASELINE/run_status.json" \
          "$MATSIM_CONFIG" "$MATSIM_POPULATION" "$MATSIM_JAR"; do
     [[ -s "$f" ]] || { echo "Missing required file: $f" >&2; exit 1; }
 done
+if [[ "${GA_NO_WARM_START:-0}" != 1 ]]; then
+    [[ -s "$WARM_START_FILE" ]] || { echo "Missing warm start: $WARM_START_FILE" >&2; exit 1; }
+fi
 for f in origins.csv jobs.csv pt_origin_connectors.csv pt_job_connectors.csv; do
     [[ -s "$SPATIAL_DIR/$f" ]] || { echo "Missing accessibility input: $SPATIAL_DIR/$f" >&2; exit 1; }
 done
