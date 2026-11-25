@@ -54,7 +54,8 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _completion_reason(scenario: Path, baseline_hashes: dict | None = None) -> str | None:
+def _completion_reason(scenario: Path, baseline_hashes: dict | None = None,
+                       completed_hashes: dict | None = None) -> str | None:
     """Return a reason to exclude this scenario, or None if complete."""
     for name in REQUIRED_SCENARIO:
         if not (scenario / name).is_file():
@@ -80,8 +81,8 @@ def _completion_reason(scenario: Path, baseline_hashes: dict | None = None) -> s
             return "baseline must have strategy=baseline and no interventions"
         if baseline_hashes:
             other = metadata.get("baseline_hashes")
-            if other != baseline_hashes:
-                return "scenario was generated from different baseline hashes"
+            if other != baseline_hashes and other != completed_hashes:
+                return "scenario was generated from different baseline hashes (neither source nor completed baseline)"
         if not (scenario / FLOW_REL).is_file() or (scenario / FLOW_REL).stat().st_size == 0:
             return "missing/empty compacted link statistics"
         if not (scenario / LINKSTATS_REL).is_file() or (scenario / LINKSTATS_REL).stat().st_size == 0:
@@ -235,6 +236,15 @@ def prepare(source: Path, output: Path, *, workers: int = 4, seed: int = 42,
     if reason:
         raise RuntimeError(f"Baseline {BASELINE_NAME} is not usable: {reason}")
     baseline_hashes = _json(baseline / "scenario.json").get("baseline_hashes")
+    # GA prepare_one hashes the *completed baseline files*, whereas the
+    # historical scenarios retain hashes of original source inputs.
+    # Derive the alternative hashes from the files, never from the GA metadata.
+    completed_hashes = {
+        "network": _sha256(baseline / "network.xml.gz"),
+        "schedule": _sha256(baseline / "transit_schedule.xml.gz"),
+    }
+    print("Source baseline hashes:", baseline_hashes, flush=True)
+    print("Completed baseline hashes:", completed_hashes, flush=True)
     if workers < 1 or max_scenarios < 0:
         raise ValueError("workers must be positive and max_scenarios nonnegative")
 
@@ -243,7 +253,7 @@ def prepare(source: Path, output: Path, *, workers: int = 4, seed: int = 42,
                              or (p / "scenario.json").exists()))
     eligible, excluded = [], {}
     for scenario in candidates:
-        reason = _completion_reason(scenario, baseline_hashes)
+        reason = _completion_reason(scenario, baseline_hashes, completed_hashes)
         if reason:
             excluded[scenario.name] = reason
         else:

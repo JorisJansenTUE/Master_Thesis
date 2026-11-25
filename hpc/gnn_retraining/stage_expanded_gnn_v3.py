@@ -22,6 +22,22 @@ REQUIRED = ['scenario.json', 'interventions.json', 'network.xml.gz', 'link_mappi
 def readj(p: Path):
     with p.open(encoding='utf-8') as f: return json.load(f)
 
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def completed_baseline_hashes(baseline: Path) -> dict:
+    """Hashes of the *files* from which optimization.prepare_scenario builds GA scenarios."""
+    return {
+        'network': sha256_file(baseline / 'network.xml.gz'),
+        'schedule': sha256_file(baseline / 'transit_schedule.xml.gz'),
+    }
+
 def get_split(d, key):
     aliases = {'train':['train','training','train_ids','train_scenarios'],
                'val':['val','validation','valid','val_ids','validation_ids'],
@@ -34,7 +50,8 @@ def get_split(d, key):
                     return set(src[k])
     raise ValueError(f'No {key} split found; keys={list(d)}')
 
-def eligible(scenario: Path, baseline_hashes: dict, is_baseline=False):
+def eligible(scenario: Path, baseline_hashes: dict, is_baseline=False,
+             completed_hashes: dict | None = None):
     for f in REQUIRED:
         p=scenario/f
         if not p.is_file() or not p.stat().st_size:
@@ -58,8 +75,13 @@ def eligible(scenario: Path, baseline_hashes: dict, is_baseline=False):
             if ints or meta.get('strategy')!='baseline':return 'bad baseline metadata'
         elif not ints or meta.get('strategy')=='baseline':
             return 'empty/non-intervention scenario'
-        if baseline_hashes and meta.get('baseline_hashes')!=baseline_hashes:
-            return 'different baseline hashes'
+        # Historical scenarios record the original source hashes. The GA
+        # scenario generator instead hashes the network/schedule in the
+        # completed baseline_00000 folder. Accept this second identity only
+        # when it is *derived from those actual files* (never a hardcoded bypass).
+        observed = meta.get('baseline_hashes')
+        if baseline_hashes and observed != baseline_hashes and observed != completed_hashes:
+            return 'different baseline hashes (neither source nor completed baseline files)' 
         summary=readj(scenario/'targets/target_summary.json')
         if summary.get('flow_file') != str(FLOW):return 'target_summary wrong flow file'
         if summary.get('flow',{}).get('rows',0)<=0:return 'target_summary no flow rows'
@@ -118,6 +140,9 @@ def main():
     if not baseline_hashes:raise ValueError('Historical baseline has no baseline_hashes')
     reason=eligible(baseline,baseline_hashes,is_baseline=True)
     if reason:raise RuntimeError(f'Baseline unusable: {reason}')
+    completed_hashes = completed_baseline_hashes(baseline)
+    print('Historical source baseline hashes:', json.dumps(baseline_hashes, sort_keys=True), flush=True)
+    print('Completed baseline file SHA-256:', json.dumps(completed_hashes, sort_keys=True), flush=True)
     segments=hist/'street_segments.csv.gz'
     if not segments.is_file() or not segments.stat().st_size:raise FileNotFoundError(segments)
 
@@ -128,7 +153,7 @@ def main():
             if sid=='baseline_00000':continue
             p=hist/sid
             if not p.is_dir():raise FileNotFoundError(f'Original {role} missing: {p}')
-            reason=eligible(p,baseline_hashes)
+            reason=eligible(p,baseline_hashes,completed_hashes=completed_hashes)
             if reason:raise RuntimeError(f'Original {role} invalid {sid}: {reason}')
             # Original test/val take priority over GA duplicates.
             candidates.append(({'test':0,'val':1,'train':3}[role],p,f'historical_{role}',role))
@@ -137,7 +162,7 @@ def main():
         dirs=direct_ga_scenarios(root)
         counters[group+'_discovered']=len(dirs)
         for p in dirs:
-            reason=eligible(p,baseline_hashes)
+            reason=eligible(p,baseline_hashes,completed_hashes=completed_hashes)
             if reason:
                 counters[group+'_excluded_'+reason]+=1
                 continue
@@ -176,7 +201,9 @@ def main():
     for group,min_count in [('historical_train',args.min_historical),('ga_spatial_warm',args.min_warm),
                             ('ga_spatial_no_warm',args.min_no_warm)]:
         if counters[group+'_included']<min_count:
-            raise ValueError(f'{group}: only {counters[group+"_included"]} usable, expected >= {min_count}')
+            causes = {k:v for k,v in counters.items() if k.startswith(group+'_excluded_')}
+            raise ValueError(f'{group}: only {counters[group+"_included"]} usable, '
+                             f'expected >= {min_count}. Exclusion reasons: {causes}')
     if not args.skip_old and counters['ga_nonspatial_old_included']<args.min_old:
         raise ValueError(f"Old GA root: {counters['ga_nonspatial_old_included']} usable scenarios; check old root, completion metadata or pass --skip-old")
 
