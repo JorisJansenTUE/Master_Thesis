@@ -11,7 +11,7 @@
 set -Eeuo pipefail
 
 # All THREE files must reside together. Only GNN_DATA is persistent.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${SCRIPT_DIR:-${SLURM_SUBMIT_DIR:-$PWD}/hpc/gnn_retraining}"
 PROJECT_ROOT="${PROJECT_ROOT:-/vast.mnt/home/20201733/Master_Thesis}"
 BASE="${BASE:-/vast.mnt/home/20201733/locarno_ETH_Model}"
 HISTORICAL_DATASET="${HISTORICAL_DATASET:-$BASE/training_dataset_v4}"
