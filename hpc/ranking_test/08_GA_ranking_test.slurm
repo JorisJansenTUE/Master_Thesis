@@ -1,11 +1,11 @@
 #!/bin/bash -l
 #SBATCH --job-name=locarno-GA-ranking
-#SBATCH --partition=tue.cpu1.q,tue.cpu2.q
+#SBATCH --partition=mech-cst-mov.cpu.q
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
-#SBATCH --time=24:00:00
+#SBATCH --mem=8G
+#SBATCH --time=4:00:00
 #SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/GA_ranking_%j.out
 #SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/GA_ranking_%j.err
 set -Eeuo pipefail
