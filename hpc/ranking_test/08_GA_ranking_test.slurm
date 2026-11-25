@@ -17,7 +17,7 @@ set -Eeuo pipefail
 # Original 05 and 07 stay untouched. No MATSim simulations are run.
 
 GA_ROOT="${GA_ROOT:-/vast.mnt/home/20201733/Master_Thesis}"
-GNN_CODE_ROOT="${GNN_CODE_ROOT:-/vast.mnt/home/20201733/Master_Thesis_delay}"
+GNN_CODE_ROOT="${GNN_CODE_ROOT:-/vast.mnt/home/20201733/Master_Thesis}"
 source "$GA_ROOT/hpc/GA_optimization/hpc_config.sh"
 BASE="${BASE:-/vast.mnt/home/20201733/locarno_ETH_Model}"
 OLD_GNN="${OLD_GNN:-$BASE/gnn_training_tt_delay}"
