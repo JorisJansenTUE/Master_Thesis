@@ -7,7 +7,11 @@ set -euo pipefail
 
 module purge
 module load Umbrella/2024
-module load Python/3.11.3-GCCcore-12.3.0
+module load Python/3.10.13
+module load EESSI/2026.06
+module load Java/25.36
+
+echo "Java: $(java -version 2>&1 | head -1)"
 
 REPO="${BIKE_POT_REPO:-${SLURM_SUBMIT_DIR:-$PWD}}"
 PYTHON_BIN="${BIKE_POT_PYTHON:-$REPO/.venv_hpc/bin/python}"
