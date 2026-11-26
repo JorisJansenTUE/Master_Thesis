@@ -16,28 +16,37 @@ from .cumulative import CumulativeAccessibility
 
 
 def plot_sufficiency_bars(summary: pd.DataFrame, output_dir: str | Path,
-                          *, opportunity_label: str = "STATENT jobs") -> None:
-    """One chart per mode; percentage of attached origins above low/high levels."""
+                          *, opportunity_label: str = "STATENT jobs",
+                          population_weighted: bool = False) -> None:
+    """One chart per mode, optionally showing the percentage of people sufficient."""
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
+    low = "pct_population_sufficient_low" if population_weighted else "pct_sufficient_low"
+    high = "pct_population_sufficient_high" if population_weighted else "pct_sufficient_high"
+    if population_weighted and not {low, high}.issubset(summary):
+        raise ValueError("STATPOP population metrics missing from sufficiency summary")
     for mode, group in summary.groupby("mode", sort=False):
         group = group.sort_values("time_min")
         ticks = np.arange(len(group))
         fig, ax = plt.subplots(figsize=(7.4, 4.4))
-        ax.bar(ticks - 0.19, group["pct_sufficient_low"], width=0.38,
+        ax.bar(ticks - 0.19, group[low], width=0.38,
                label="Low: 50% of baseline car mean", color="#168477")
-        ax.bar(ticks + 0.19, group["pct_sufficient_high"], width=0.38,
+        ax.bar(ticks + 0.19, group[high], width=0.38,
                label="High: 100% of baseline car mean", color="#5473ab")
         ax.set_xticks(ticks, [f"{t:g} min" for t in group["time_min"]])
         ax.set_ylim(0, 105)
-        ax.set_ylabel("Attached origins meeting sufficiency (%)")
+        ax.set_ylabel("Residents with sufficient accessibility (%)" if population_weighted
+                      else "Attached origins meeting sufficiency (%)")
         ax.set_title(f"{opportunity_label} accessibility sufficiency — {mode.upper()}")
         ax.grid(axis="y", alpha=0.2)
         ax.set_axisbelow(True)
         ax.legend(loc="upper left", fontsize=9)
         n = group["n_attached"].iloc[0]
         total = group["n_origins"].iloc[0]
-        ax.text(0.99, 0.02, f"{n:,} / {total:,} origins attached",
+        label = (f"{group['population_attached'].iloc[0]:,.0f} / "
+                 f"{group['population_total'].iloc[0]:,.0f} residents attached"
+                 if population_weighted else f"{n:,} / {total:,} origins attached")
+        ax.text(0.99, 0.02, label,
                 transform=ax.transAxes, ha="right", va="bottom", fontsize=9)
         fig.tight_layout()
         fig.savefig(output / f"sufficiency_{mode}.png", dpi=170)
@@ -52,8 +61,16 @@ def create_hexagon_geopackage(origins_gpkg: str | Path, scored: pd.DataFrame,
         raise ValueError("Input GeoPackage must contain unique hex_id values")
     hexagons["hex_id"] = hexagons["hex_id"].astype(str)
     expected = set(hexagons["hex_id"])
+    # Store residential population once as a shared hexagon attribute, not three
+    # duplicated mode_ columns. This is only metadata; jobs remain unweighted.
+    if "population" in scored:
+        pop = scored.loc[scored["mode"] == "car", ["hex_id", "population"]]
+        if pop.hex_id.duplicated().any():
+            raise ValueError("Duplicate residential population hexagons")
+        hexagons = hexagons.merge(pop, on="hex_id", how="left", validate="one_to_one")
     for mode in scored["mode"].unique():
-        mode_data = scored.loc[scored["mode"] == mode].drop(columns="mode").copy()
+        mode_data = scored.loc[scored["mode"] == mode].drop(
+            columns=["mode", "population"], errors="ignore").copy()
         if set(mode_data["hex_id"]) != expected:
             raise ValueError(f"{mode} results do not match hexagon IDs in origins.gpkg")
         columns = {col: f"{mode}_{col}" for col in mode_data if col != "hex_id"}

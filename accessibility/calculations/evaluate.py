@@ -11,6 +11,7 @@ from pathlib import Path
 import pandas as pd
 
 from accessibility.calculations.cumulative import CumulativeAccessibility
+from accessibility.calculations.population_metrics import attach_population
 from accessibility.inputs.grid.snapping import ScenarioRoadSnapper
 from accessibility.inputs.links.linkstats import LinkTravelTimes
 from accessibility.inputs.links.network import PTNetwork, load_road_networks
@@ -32,6 +33,7 @@ def calculate_accessibility(
     job_snap_m: float = 300.0,
     car_parking_penalty_s: float = 300.0,
     linkstats_override: LinkTravelTimes | None = None,
+    population_weighted: bool = False,
 ) -> pd.DataFrame:
     """Return per-origin car/bike/PT opportunities using the actual scenario.
 
@@ -83,8 +85,9 @@ def calculate_accessibility(
     if car_parking_penalty_s < 0 or car_parking_penalty_s >= min(thresholds_min) * 60:
         raise ValueError("Car parking penalty must be nonnegative and smaller than the shortest cutoff")
     cumulative = CumulativeAccessibility(thresholds_min)
-    return pd.concat([
+    result = pd.concat([
         cumulative.run(car_router, origin_ids, mode="car", extra_time_s=car_parking_penalty_s),
         cumulative.run(bike_router, origin_ids, mode="bike"),
         cumulative.run(pt_router, origin_ids, mode="pt"),
     ], ignore_index=True)
+    return attach_population(result, spatial_dir) if population_weighted else result

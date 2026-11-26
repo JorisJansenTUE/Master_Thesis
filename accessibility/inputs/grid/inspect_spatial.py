@@ -11,6 +11,7 @@ from pathlib import Path
 from time import perf_counter
 
 from .employment import EmploymentDestinations
+from .population import aggregate_population
 from . import destination_settings as dest
 from .origins import HexagonOrigins
 from .snapping import RoadSnapIndex
@@ -35,6 +36,7 @@ HOUR_START = 8
 LINKSTATS_STATISTIC = "avg"
 AVERAGED_ITERATIONS = 8
 BIKE_SPEED_M_S = 4.17  # provisional, not calibrated
+PREPARE_STATPOP = False  # True: one-off STATPOP residents -> origin hexagon CSV
 
 
 def _describe(mode: str, label: str, attachments) -> None:
@@ -82,6 +84,13 @@ def main() -> None:
     t2 = perf_counter()
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     origins.save(OUTPUT_DIR / "origins.gpkg", OUTPUT_DIR / "origins.csv")
+    if PREPARE_STATPOP:
+        if not dest.STATPOP_FILE.is_file():
+            raise FileNotFoundError(f"STATPOP dataset missing: {dest.STATPOP_FILE}")
+        population, info = aggregate_population(dest.STATPOP_FILE, OUTPUT_DIR / "origins.gpkg", layer="origins")
+        population.to_csv(OUTPUT_DIR / "population_by_hexagon.csv", index=False)
+        print(f"STATPOP residents: {info['total_assigned_residents']:,.0f}, "
+              f"populated hexagons: {info['population_hexagons']:,}")
     jobs.save(OUTPUT_DIR / "jobs.csv")
 
     print("=" * 68)
