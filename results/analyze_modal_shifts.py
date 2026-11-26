@@ -1,33 +1,43 @@
 """Compare MATSim scenario mode shares against one baseline.
 
 Requires: pandas, numpy, matplotlib
-Edit SETTINGS below, then run: python analyze_modal_shifts.py
+Run on the HPC: python analyze_modal_shifts_hpc.py
+Optional: set LOCARNO_ROOT to override the data root (e.g. for testing).
 """
 from pathlib import Path
 import warnings
+import os
+import re
 
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
 # ============================== SETTINGS ==============================
-# Paths can be absolute or relative to the directory you run the script from.
-BASELINE = Path('data/Simulated_Runs_v2/baseline_00000')
+# HPC paths recovered from the Locarno project discussions.
+ROOT = Path(os.environ.get('LOCARNO_ROOT', '/vast.mnt/home/20201733/locarno_ETH_Model'))
+BASELINE = ROOT / 'training_dataset_v4' / 'baseline_00000'
+GA_ROOT = ROOT / 'GA_Optimization'
+VANILLA = 'Vanilla GA'
+WARM = 'Spatial GA – warm start'
+NO_WARM = 'Spatial GA – no warm start'
 GROUPS = {
-    'Training set': [Path('data/Simulated_Runs_v2')],
-    'GA without warm start': [Path('data/GA_Optimization/run01')],
-    'GA with warm start': [Path('data/GA_Optimization/run02')],
+    'Training set': [ROOT / 'training_dataset_v4'],
+    VANILLA: [GA_ROOT],
+    WARM: [GA_ROOT / 'ga_20min_park5_15km_run01'],
+    NO_WARM: [GA_ROOT / 'ga_20min_park5_15km_seed1234_no_warm'],
 }
-# Optional: point to scenario directories containing targets/modestats.csv.
+# Match direct scenario folders, not the named spatial GA run directories.
+VANILLA_SCENARIO = re.compile(r'ga_[0-9a-fA-F]{16}')
+# Previously identified best solutions; selection is not based on modal shifts.
 BEST_RUNS = {
-    'GA without warm start': Path('data/optimization/best_runs/ga_no_warm_best'),
-    'GA with warm start': Path('data/optimization/best_runs/ga_warm_best'),
+    WARM: 'ga_044ded2d27389dc7',
+    NO_WARM: 'ga_eecdb4e965e4fda5',
 }
-OUTPUT = Path('data/modal_shift_analysis')
+OUTPUT = ROOT / 'modal_shift_analysis'
 ITERATION = None  # None = last available iteration; or set e.g. 100 for all.
 # Group corresponding loop categories; no renormalization is performed.
 MODE_GROUPS = {
@@ -43,6 +53,7 @@ MODE_GROUPS = {
 def read_shares(path):
     df = pd.read_csv(path, sep=';')
     df.columns = df.columns.str.strip()
+    df = df.rename(columns={c: 'iteration' for c in df.columns if c.lower() == 'iteration'})
     if 'iteration' not in df or df.empty:
         raise ValueError('Missing iteration column or empty file')
     df['iteration'] = pd.to_numeric(df['iteration'], errors='raise')
@@ -79,7 +90,7 @@ def make_record(path, group, baseline, baseline_iteration):
 
 
 def save(fig, name):
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, .04, 1, 1) if name == '01_modal_shift_distributions' else None)
     for ext in ('png', 'svg'):
         fig.savefig(OUTPUT / f'{name}.{ext}', dpi=220, bbox_inches='tight')
     plt.close(fig)
@@ -88,7 +99,7 @@ def save(fig, name):
 def boxplot(data, colors):
     groups = list(data['group'].unique())
     modes = list(MODE_GROUPS)
-    fig, ax = plt.subplots(figsize=(9, max(4.5, len(modes) * 0.35 * len(groups))))
+    fig, ax = plt.subplots(figsize=(9, max(4.5, len(modes) * 0.32 * len(groups))))
     width = 0.78 / len(groups)
     for j, group in enumerate(groups):
         subset = data[data['group'] == group]
@@ -170,7 +181,17 @@ def main():
             if not root.is_dir():
                 errors.append({'group': group, 'path': str(root), 'reason': 'Root directory not found'})
                 continue
-            for path in sorted(root.rglob('targets/modestats.csv')):
+            if group == VANILLA:
+                # Never recurse into spatial GA runs from the common parent.
+                candidates = sorted(
+                    d / 'targets' / 'modestats.csv'
+                    for d in root.iterdir()
+                    if d.is_dir() and VANILLA_SCENARIO.fullmatch(d.name)
+                )
+            else:
+                candidates = sorted(root.rglob('targets/modestats.csv'))
+            print(f'  {root}: {len(candidates):,} candidate files', flush=True)
+            for path in candidates:
                 if path.resolve() == base_file.resolve() or path.parent.parent.name.startswith('baseline_'):
                     continue
                 resolved = path.resolve()
@@ -180,10 +201,15 @@ def main():
                     continue
                 seen[resolved] = group
                 add(path, group, records)
-        print(f'{group}: {len(records)-before:,} valid scenarios')
+        print(f'{group}: {len(records)-before:,} valid scenarios', flush=True)
     best_records = []
-    for name, folder in BEST_RUNS.items():
-        add(folder / 'targets' / 'modestats.csv', name, best_records)
+    for group, scenario in BEST_RUNS.items():
+        matches = [r for r in records if r['group'] == group and r['scenario'] == scenario]
+        if len(matches) == 1:
+            best_records.append(matches[0])
+        else:
+            errors.append({'group': group, 'path': scenario,
+                           'reason': f'Expected one valid best scenario, found {len(matches)}'})
     pd.DataFrame(errors, columns=['group', 'path', 'reason']).to_csv(OUTPUT / 'skipped_files.csv', index=False)
     if not records:
         raise RuntimeError(f'No valid scenarios found. Check {OUTPUT / "skipped_files.csv"}')
@@ -214,7 +240,12 @@ def main():
         best = pd.DataFrame(best_records)
         best.to_csv(OUTPUT / 'best_ga_modal_shifts.csv', index=False)
         best_plot(best, colors)
+    else:
+        for name in ('best_ga_modal_shifts.csv', '03_best_ga_modal_shifts.png', '03_best_ga_modal_shifts.svg'):
+            (OUTPUT / name).unlink(missing_ok=True)
     print(f'Baseline iteration: {base_iter}; skipped/warnings: {len(errors)}')
+    if errors:
+        print(f'Inspect {OUTPUT / "skipped_files.csv"} for details.')
     print(iterations.to_string(index=False))
     print(f'Output: {OUTPUT.resolve()}')
 
