@@ -26,7 +26,7 @@ CAR_CONSTRAINT_TOLERANCE_PP = 5.0          # minimum = baseline car sufficiency 
 # -------- Routing/cache provenance: not population-weight toggles --------
 # These must match the accessibility_by_hexagon caches; changing requires
 # --compute-missing --force-recalculate (and suitable MATSim scenario input).
-CAR_PARKING_PENALTY_S = 0
+CAR_PARKING_PENALTY_S = 300
 HOUR_START = 8
 LINKSTATS_STATISTIC = "avg"
 BIKE_SPEED_M_S = 4.17
