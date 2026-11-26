@@ -4,8 +4,8 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=64G
 #SBATCH --time=06:00:00
-#SBATCH --output=%x_%j.out
-#SBATCH --error=%x_%j.err
+#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/%x_%j.out
+#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/%x_%j.err
 set -euo pipefail
 
 module purge
