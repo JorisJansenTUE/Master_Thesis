@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Visualize car vs (bike+PT) trade-offs using existing STATPOP fitness chunks.
+"""Car vs (bike+PT) fitness trade-off using the Experiment C (zero-parking) output.
 
 Usage:
- python plot_fitness_tradeoff.py --trial /path/to/fitness_experiments/trial_01
+ python plot_parking0_tradeoff.py --trial /path/to/fitness_experiments/trial_08_parking0
 
-Reads experiment.json and chunks/chunk_*.json. Uses Python stdlib only;
-requires no MATSim, routing, pandas, matplotlib, or additional installations.
-Does not alter scored scenarios. Writes SVG, CSV, and Markdown under trial/tradeoff.
+Reads experiment.json and fitness_scores.csv.gz. Uses Python stdlib only: no MATSim,
+accessibility rerouting, numpy, pandas, or matplotlib. Writes SVG, CSV, and Markdown.
+Each score is computed with zero car parking and the *recalibrated* common low
+sufficiency threshold, as in Experiment C.
 """
 from __future__ import annotations
 
 import argparse
 import csv
+import gzip
 import json
 import math
 from collections import Counter
@@ -61,62 +63,76 @@ def component_scores(obj: dict, cutoff: float = 20.0) -> dict:
 
 
 def read_trial(folder: Path) -> tuple[list[dict], dict, dict, int]:
+    """Use Experiment C's *recomputed* mode scores, never the older Trial 01 chunks."""
     meta = json.loads((folder / "experiment.json").read_text(encoding="utf-8"))
-    cfg = meta["config"]
-    # The interpretation of the diagonal depends on these exact settings.
-    weights = {k:float(v) for k,v in cfg["MODE_WEIGHTS"].items()}
-    times = {float(k):float(v) for k,v in cfg["TIME_WEIGHTS"].items()}
-    if (weights != {"car":1.0,"bike":1.0,"pt":1.0}
-            or times != {20.0:1.0}
-            or float(cfg["SUFFICIENCY_FRACTION"]) != 0.5
-            or float(cfg["SHORTFALL_EXPONENT"]) != 2.0
-            or bool(cfg["CAR_CONSTRAINT_ENABLED"])):
-        raise ValueError("This plot is specifically for Trial 01: 20min, low threshold, "
-                         "quadratic, equal car/bike/PT weights, and NO car constraint. "
-                         "Use a matching experiment rather than mislabeling the objective.")
+    cfg = meta.get("new_settings", {})
+    weights = {str(k): float(v) for k, v in cfg.get("MODE_WEIGHTS", {}).items()}
+    times = {float(k): float(v) for k, v in cfg.get("TIME_WEIGHTS", {}).items()}
+    if (weights != {"car": 1.0, "bike": 1.0, "pt": 1.0}
+            or times != {20.0: 1.0}
+            or not math.isclose(float(cfg.get("SUFFICIENCY_FRACTION", -1)), 0.5)
+            or not math.isclose(float(cfg.get("SHORTFALL_EXPONENT", -1)), 2.0)
+            or bool(cfg.get("CAR_CONSTRAINT_ENABLED", True))
+            or not math.isclose(float(cfg.get("CAR_PARKING_PENALTY_S", -1)), 0.0)):
+        raise ValueError("This script requires Experiment C: zero parking, a common low "
+                         "sufficiency threshold, quadratic shortfall, equal weights and no constraint")
+    if not math.isclose(float(meta["common_low_threshold_jobs"]),
+                        0.5 * float(meta["baseline_new_car_reference_jobs"]),
+                        rel_tol=1e-10):
+        raise ValueError("New threshold does not match 50% of baseline car reference")
     base = component_scores(meta["baseline_score"])
     base_total = float(meta["baseline_score"]["raw_fitness"])
     if not math.isclose(base_total, sum(base.values())/3, abs_tol=1e-8):
         raise ValueError("Baseline component scores do not reproduce the baseline fitness")
-    n_chunks = int(meta["n_chunks"])
+    path = folder / "fitness_scores.csv.gz"
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing {path}: finish Experiment C first")
     rows = []
-    error_count = 0
     seen = set()
-    for index in range(n_chunks):
-        file = folder / "chunks" / f"chunk_{index:05d}.json"
-        if not file.is_file():
-            raise FileNotFoundError(f"Missing chunk {file}; finalize the experiment first")
-        block = json.loads(file.read_text(encoding="utf-8"))
-        error_count += len(block["errors"])
-        for item in block["completed"]:
-            s = component_scores(item)
-            delta = {m: s[m]-base[m] for m in MODES}
-            sustained = (s["bike"]+s["pt"])/2
-            delta_sustained = (delta["bike"]+delta["pt"])/2
-            delta_total = (delta["car"]+2*delta_sustained)/3
-            if not math.isclose(float(item["raw_fitness"]), sum(s.values())/3, abs_tol=2e-8):
-                raise ValueError(f"Objective mismatch for {item['scenario']}")
-            if not math.isclose(float(item["raw_fitness"])-base_total, delta_total, abs_tol=2e-8):
-                raise ValueError(f"Delta mismatch for {item['scenario']}")
-            key = str(item.get("key") or item["source"])
+    with gzip.open(path, 'rt', encoding='utf-8', newline='') as handle:
+        for item in csv.DictReader(handle):
+            score = {m: float(item[m+'_score']) for m in MODES}
+            if not all(math.isfinite(v) and 0 <= v <= 1 + 1e-9 for v in score.values()):
+                raise ValueError(f"Invalid modal scores: {item['scenario']}")
+            total = float(item['fitness'])
+            d = {m: score[m] - base[m] for m in MODES}
+            delta_sust = (d['bike'] + d['pt']) / 2
+            delta_total = (d['car'] + 2*delta_sust)/3
+            if not math.isclose(total, sum(score.values())/3, abs_tol=2e-8):
+                raise ValueError(f"Modal scores do not reproduce scenario fitness: {item['scenario']}")
+            if not math.isclose(total-base_total, delta_total, abs_tol=2e-8):
+                raise ValueError(f"Incorrect baseline-relative delta: {item['scenario']}")
+            if not math.isclose(float(item['delta_fitness']), delta_total, abs_tol=2e-8):
+                raise ValueError(f"Stored delta_fitness inconsistent: {item['scenario']}")
+            key = str(item['key'])
             if key in seen:
-                raise ValueError(f"Duplicate scenario key: {key}")
+                raise ValueError(f"Duplicate key: {key}")
             seen.add(key)
             rows.append({
-                "key": key, "scenario": str(item["scenario"]),
-                "source": str(item["source"]),
-                "group": classify(str(item["source"]), str(item["scenario"])),
-                "car_score": s["car"], "bike_score":s["bike"], "pt_score":s["pt"],
-                "sustainable_score": sustained, "total_fitness": float(item["raw_fitness"]),
-                "delta_car_pp": 100*delta["car"],
-                "delta_bike_pp": 100*delta["bike"],
-                "delta_pt_pp": 100*delta["pt"],
-                "delta_sustainable_pp": 100*delta_sustained,
-                "delta_total_pp":100*delta_total,
+                'key': key, 'scenario': item['scenario'],
+                'source': item['source'], 'group': classify(item['source'], item['scenario']),
+                'car_score': score['car'], 'bike_score': score['bike'],
+                'pt_score': score['pt'], 'sustainable_score': (score['bike']+score['pt'])/2,
+                'total_fitness': total,
+                'delta_car_pp': 100*d['car'],
+                'delta_bike_pp': 100*d['bike'],
+                'delta_pt_pp': 100*d['pt'],
+                'delta_sustainable_pp': 100*delta_sust,
+                'delta_total_pp': 100*delta_total,
             })
-    if len(rows)+error_count != int(meta["n_scenarios"]):
-        raise ValueError("Mismatched number of completed and failed scenarios")
-    return rows, base, meta, error_count
+    if not rows:
+        raise ValueError('No scored rows found in Experiment C')
+    total_expected = int(meta['n_scenarios'])
+    n_failed = total_expected - len(rows)
+    if n_failed < 0:
+        raise ValueError('More scored rows than in the experiment manifest')
+    failed_file = folder / 'failures.csv'
+    if failed_file.is_file():
+        with failed_file.open('r', encoding='utf-8', newline='') as handle:
+            failures = sum(1 for _ in csv.DictReader(handle))
+        if failures != n_failed:
+            raise ValueError(f'Failed rows mismatch: expected {n_failed}, CSV has {failures}')
+    return rows, base, meta, n_failed
 
 
 def pareto_indices(rows: list[dict]) -> list[int]:
@@ -243,22 +259,22 @@ def plot_svg(rows:list[dict], indices:list[int], frontier: list[int],
     add(f'<line x1="904" y1="{y0+19}" x2="949" y2="{y0+19}" stroke="#bf7538" stroke-dasharray="6 5" stroke-width="2"/>')
     add(f'<text x="958" y="{y0+23}" font-size="12" fill="#38465a">No net fitness change</text>')
     add(f'<circle cx="916" cy="{y0+53}" r="6" fill="#b51d3b" stroke="white" stroke-width="1"/>')
-    add(f'<text x="933" y="{y0+57}" font-size="12" fill="#38465a">Best Trial 01 F</text>')
+    add(f'<text x="933" y="{y0+57}" font-size="12" fill="#38465a">Best combined F</text>')
     add(f'<circle cx="916" cy="{y0+82}" r="6" fill="#2b6777" stroke="white" stroke-width="1"/>')
     add(f'<text x="933" y="{y0+86}" font-size="12" fill="#38465a">Best bike+PT F</text>')
     add(f'<circle cx="916" cy="{y0+111}" r="6" fill="#fff" stroke="#262c33" stroke-width="2"/>')
     add(f'<text x="933" y="{y0+115}" font-size="12" fill="#38465a">Baseline (0, 0)</text>')
     add(f'<text x="904" y="{y0+160}" font-size="13" font-weight="700" fill="#263447">Interpretation</text>')
-    for j,t in enumerate(["Upper left: sustainable gain,", "but car fitness declines.", "Above dashed diagonal:", "combined Trial 01 F improves.", "Car scores can conceal losses", "above sufficiency threshold."]):
+    for j,t in enumerate(["Upper left: sustainable gain,", "but car fitness declines.", "Above dashed diagonal:", "combined F improves.", "Car scores can conceal losses", "above sufficiency threshold."]):
         add(f'<text x="904" y="{y0+184+j*20}" font-size="12" fill="#526073">{escape(t)}</text>')
-    add(f'<text x="{left}" y="{H-35}" font-size="11" fill="#627086">Source: existing cached fitness scenarios; identical 20-min cutoff and 50% sufficiency threshold. Scores are dimensionless.</text>')
+    add(f'<text x="{left}" y="{H-35}" font-size="11" fill="#627086">Source: Experiment C, zero car parking; 20-min cutoff, recalibrated 50% threshold. Scores are dimensionless.</text>')
     add('</svg>')
     filename.write_text('\n'.join(out),encoding='utf-8')
 
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--trial',type=Path,required=True,help='Path to existing fitness_experiments/trial_01')
+    ap.add_argument('--trial',type=Path,required=True,help='Path to finished fitness_experiments/trial_08_parking0')
     ap.add_argument('--out',type=Path,default=None,help='Output directory (default: TRIAL/tradeoff)')
     args=ap.parse_args()
     folder=args.trial.resolve(strict=True)
@@ -289,17 +305,17 @@ def main():
     plot_svg(rows,list(range(len(rows))),front,best_idx,best_sust_idx,
              out/'car_vs_sustainable_all.svg',
              'Car versus sustainable accessibility | All scenarios',
-             f'{len(rows):,} evaluated | {n_failed} incompatible caches excluded | {len(front)} Pareto-optimal scenarios')
+             f'{len(rows):,} evaluated | {n_failed} routing errors | {len(front)} Pareto-optimal scenarios')
     plot_svg(rows,top_indices,front,best_idx,best_sust_idx,
              out/'car_vs_sustainable_top10pct.svg',
              'Car versus sustainable accessibility | Best 10% of scenarios',
-             f'Top {n_top:,} ranked by the equal-weight Trial 01 objective | Pareto frontier highlighted',
+             f'Top {n_top:,} ranked by recalibrated zero-parking objective | Pareto frontier highlighted',
              include_baseline=False)
     winner=rows[best_idx];best_sust=rows[best_sust_idx]
     report=[
-        '# Car / bicycle + PT trade-off | Trial 01','',
-        '**Objective:** 20-minute population-weighted sufficiency; common low (50%) threshold; squared shortfall; equal weights for car, bicycle and PT; no car constraint.','',
-        f'**Analyzed scenarios:** {len(rows):,}; excluded/failed: {n_failed:,}.',
+        '# Car / bicycle + PT trade-off | Experiment C (zero parking)','',
+        '**Objective:** 20-minute population-weighted sufficiency; new common low (50%) baseline car threshold with zero parking; squared shortfall; equal mode weights; no car constraint.','',
+        f'**Analyzed scenarios:** {len(rows):,}; Experiment C failures: {n_failed:,}.', f'**Recalibrated low threshold:** {meta["common_low_threshold_jobs"]:,.1f} accessible jobs.', f'**Baseline combined fitness:** {meta["baseline_score"]["raw_fitness"]:.8f}.',
         f'**Scenarios improving combined F:** {above:,} ({100*above/len(rows):.1f}%).',
         f'**Pareto frontier:** {len(front)} scenarios (computed in low-threshold modal fitness, with baseline as a possible comparator).','',
         '| Baseline modal score | Score |','|---|---:|',
@@ -313,10 +329,10 @@ def main():
         '## Sources','',
         *[f'- {name}: {groups[name]:,}' for name in COLORS if groups[name]],'',
         '## Interpreting the graph','',
-        '- Horizontal: car score change; vertical: average bike/PT score change; both in score percentage points.','- Dashed diagonal is ΔF = 0: a point above the line improves the equally weighted combined objective.','- Upper left indicates the policy trade-off: improvements for bicycle/PT despite lower car scores.','- A nearly unchanged car *score* does **not** imply negligible losses in car accessible jobs. Car utility saturates above the sufficiency threshold.','- Pareto optimality is relative only to the evaluated scenarios, not to all physically possible interventions.','- The 319 excluded scenarios are not assessed; no MATSim simulations or accessibility routing is performed.',''
+        '- Horizontal: car score change; vertical: average bike/PT score change; both in score percentage points.','- Dashed diagonal is ΔF = 0: a point above the line improves the equally weighted combined objective.','- Upper left indicates the policy trade-off: improvements for bicycle/PT despite lower car scores.','- A nearly unchanged car *score* does **not** imply negligible losses in car accessible jobs. Car utility saturates above the sufficiency threshold.','- Pareto optimality is relative only to the evaluated scenarios, not to all physically possible interventions.','- This plot performs no routing; it reads the completed Experiment C output. The 319 legacy scenarios were never part of Experiment C.',''
     ]
     (out/'SUMMARY.md').write_text('\n'.join(report),encoding='utf-8')
-    print(f'Trial 01 trade-off: {len(rows)} scored; {n_failed} failed/excluded; {len(front)} Pareto-frontier points')
+    print(f'Zero-parking trade-off: {len(rows)} scored; {n_failed} rerouting failures; {len(front)} Pareto-frontier points')
     print(f'Improved combined score: {above}/{len(rows)} ({100*above/len(rows):.1f}%)')
     print(f'Best combined: {winner["scenario"]}, Δcar={winner["delta_car_pp"]:+.4f} pp, Δbike+PT={winner["delta_sustainable_pp"]:+.4f} pp, ΔF={winner["delta_total_pp"]:+.4f} pp')
     print(f'Best bike+PT: {best_sust["scenario"]}, Δcar={best_sust["delta_car_pp"]:+.4f} pp, Δbike+PT={best_sust["delta_sustainable_pp"]:+.4f} pp, ΔF={best_sust["delta_total_pp"]:+.4f} pp')
