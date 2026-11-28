@@ -3,18 +3,19 @@
 #SBATCH --partition=mech-cst-mov.cpu.q
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=24
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=48G
 #SBATCH --time=12:00:00
 #SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_trial08_v3_%j.out
 #SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_trial08_v3_%j.err
 set -Eeuo pipefail
 
-# Source-aware extension of the earlier expanded dataset. Parent split membership
-# is frozen; both seed42 50-km GA runs are TRAIN. A different-seed GA is optional
-# TEST. We do NOT infer independent validation from related seed42 trajectories.
-SCRIPT_DIR="/vast.mnt/home/20201733/Master_Thesis/hpc/gnn_retraining"
+# Source-aware extension of earlier expanded dataset. Old splits are frozen.
+# For each new seed42 GA, complete late-generation blocks (~20%) become VAL;
+# the independent-seed future GA is kept strictly external/test.
+# SLURM runs a spooled copy of this script, so never derive SCRIPT_DIR from BASH_SOURCE.
 PROJECT_ROOT="${PROJECT_ROOT:-/vast.mnt/home/20201733/Master_Thesis}"
+SCRIPT_DIR="$PROJECT_ROOT/hpc/gnn_retraining"
 BASE="${BASE:-/vast.mnt/home/20201733/locarno_ETH_Model}"
 PARENT_GNN="${PARENT_GNN:-$BASE/gnn_training_tt_delay_expanded_v2}"
 HISTORICAL="${HISTORICAL:-$BASE/training_dataset_v4}"
@@ -23,10 +24,14 @@ GA50_B="${GA50_B:-$BASE/GA_Optimization/ga_trial08_20min_park0_50km_seed42_explo
 TEST_GA_DIR="${TEST_GA_DIR:-}"  # optional, completed independent-seed GA, NEVER a seed42 continuation
 GNN_DATA="${GNN_DATA:-$BASE/gnn_training_tt_delay_expanded_v3}"
 VENV="${VENV:-/vast.mnt/home/20201733/Master_Thesis/.venv-gnn}"
-PREP_WORKERS="${PREP_WORKERS:-16}"
+PREP_WORKERS="${PREP_WORKERS:-12}"
 PREP_RESUME="${PREP_RESUME:-0}"
 PEAK_HOUR="${PEAK_HOUR:-8}"
 SPLIT_SEED="${SPLIT_SEED:-42}"
+VAL_FRACTION="${VAL_FRACTION:-0.20}"
+MIN_GENERATION_COVERAGE="${MIN_GENERATION_COVERAGE:-0.80}"
+GA50_A_STATE="${GA50_A_STATE:-}"
+GA50_B_STATE="${GA50_B_STATE:-}"
 MIN_PER_RUN="${MIN_PER_RUN:-1}"
 
 module purge
@@ -63,8 +68,11 @@ trap 'rm -rf -- "$STAGING_ROOT"' EXIT
 STAGED="$STAGING_ROOT/scenarios"
 args=(--parent-gnn "$PARENT_GNN" --historical "$HISTORICAL" --out "$STAGED"
       --seed "$SPLIT_SEED" --min-per-run "$MIN_PER_RUN"
+      --val-fraction "$VAL_FRACTION" --min-generation-coverage "$MIN_GENERATION_COVERAGE"
       --train-ga "ga_trial08_seed42=$GA50_A"
       --train-ga "ga_trial08_seed42_explore=$GA50_B")
+[[ -z "$GA50_A_STATE" ]] || args+=(--generation-state "ga_trial08_seed42=$GA50_A_STATE")
+[[ -z "$GA50_B_STATE" ]] || args+=(--generation-state "ga_trial08_seed42_explore=$GA50_B_STATE")
 if [[ -n "$TEST_GA_DIR" ]]; then
   args+=(--test-ga "ga_trial08_new_seed_test=$TEST_GA_DIR")
 fi
