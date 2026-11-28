@@ -13,7 +13,7 @@ set -Eeuo pipefail
 # Source-aware extension of the earlier expanded dataset. Parent split membership
 # is frozen; both seed42 50-km GA runs are TRAIN. A different-seed GA is optional
 # TEST. We do NOT infer independent validation from related seed42 trajectories.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="/vast.mnt/home/20201733/Master_Thesis/hpc/gnn_retraining"
 PROJECT_ROOT="${PROJECT_ROOT:-/vast.mnt/home/20201733/Master_Thesis}"
 BASE="${BASE:-/vast.mnt/home/20201733/locarno_ETH_Model}"
 PARENT_GNN="${PARENT_GNN:-$BASE/gnn_training_tt_delay_expanded_v2}"
