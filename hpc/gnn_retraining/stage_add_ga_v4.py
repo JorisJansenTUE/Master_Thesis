@@ -61,7 +61,8 @@ def run(args: argparse.Namespace) -> dict:
     historical = args.historical.resolve(strict=True)
     baseline = historical / "baseline_00000"
     segments = historical / "street_segments.csv.gz"
-    for p in (baseline / "scenario.json", baseline / "network.xml.gz", segments,
+    for p in (baseline / "scenario.json", baseline / "network.xml.gz",
+              baseline / "transit_schedule.xml.gz", segments,
               parent / "splits.json", parent / "fixed_provenance.json",
               parent / "preparation_metadata" / "source_manifest.csv"):
         if not p.is_file():
@@ -70,7 +71,16 @@ def run(args: argparse.Namespace) -> dict:
     baseline_hashes = baseline_meta.get("baseline_hashes")
     if not baseline_hashes:
         raise ValueError("Historical baseline has no baseline_hashes")
-    reason = eligible(baseline, baseline_hashes, is_baseline=True)
+    # The historical baseline records hashes of original inputs; GA scenarios
+    # record hashes of *completed* baseline_00000 network and schedule files.
+    # This is the verified November 25 provenance fix: derive the alternative
+    # identity from the actual files, never whitelist arbitrary metadata.
+    completed_hashes = {
+        "network": _sha(baseline / "network.xml.gz"),
+        "schedule": _sha(baseline / "transit_schedule.xml.gz"),
+    }
+    reason = eligible(baseline, baseline_hashes, is_baseline=True,
+                      completed_hashes=completed_hashes)
     if reason:
         raise ValueError(f"Invalid historical baseline: {reason}")
     provenance = _json(parent / "fixed_provenance.json")
@@ -96,7 +106,7 @@ def run(args: argparse.Namespace) -> dict:
         source = Path(row["source"]).resolve(strict=True)
         if source.name != sid or not source.is_dir():
             raise ValueError(f"Scenario ID/source mismatch: {sid} -> {source}")
-        reason = eligible(source, baseline_hashes)
+        reason = eligible(source, baseline_hashes, completed_hashes=completed_hashes)
         if reason:
             raise ValueError(f"Previously included scenario became invalid: {sid}: {reason}")
         fp = fingerprint(source)
@@ -134,7 +144,7 @@ def run(args: argparse.Namespace) -> dict:
             if not candidates:
                 raise RuntimeError(f"No GA scenario folders containing scenario.json under {root}")
             for source in candidates:
-                reason = eligible(source, baseline_hashes)
+                reason = eligible(source, baseline_hashes, completed_hashes=completed_hashes)
                 if reason:
                     counts[f"{label}_excluded_incomplete_or_invalid"] += 1
                     continue
