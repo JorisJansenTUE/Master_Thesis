@@ -27,7 +27,7 @@ from network_sampling.dataset.generate import DEFAULT_SETTINGS, load_baseline, s
 from network_sampling.validation.matsim_connectivity import MatsimConnectivityError
 from optimization.ga import (
     build_spatial_context, configuration_hash, crossover, initial_population,
-    mutate, validate_individual,
+    mutate, validate_individual, IMMIGRANT_BUDGET_FRACTIONS,
 )
 from optimization.prepare_scenario import prepare_one
 from optimization import warm_start as warm
@@ -43,13 +43,13 @@ REFERENCE_FILE = warm.REFERENCE_FILE
 BUDGET_M = 50000.0
 POPULATION_SIZE = 80
 GENERATIONS = 80               # Total, including generation 0
-SEED = 1234
+SEED = 42
 ELITES = 2
-IMMIGRANT_FRACTION = 0.10
-TOURNAMENT_SIZE = 3
+IMMIGRANT_FRACTION = 0.20
+TOURNAMENT_SIZE = 2
 CROSSOVER_PROBABILITY = 0.40  # Prefer local improvements over mixing patches
 MUTATION_PROBABILITY = 0.80
-OPERATOR_VERSION = "spatial_v1_multistep_trial08"
+OPERATOR_VERSION = "spatial_v2_explore_trial08"
 MUTATION_STEPS = (1, 2, 4, 8, 12)
 PREFLIGHT_MAX_REPLACEMENTS = 80  # Bound resampling per invalid candidate
 # Used by existing HPC overnight runner, which invokes `step` without jar args.
@@ -225,8 +225,8 @@ def _new_candidate_after_preflight_failure(
                 )
             else:
                 strategy = rng.choice(("random", "corridor", "cluster"))
-                # Target can be short; the GA budget itself remains a MAXIMUM.
-                low, high = rng.choice(((0.05, 0.20), (0.20, 0.47), (0.47, 1.0)))
+                # Match the exploratory sampler; the GA budget remains a MAXIMUM.
+                low, high = rng.choice(IMMIGRANT_BUDGET_FRACTIONS)
                 target = max(min(250.0, full_budget), rng.uniform(low, high) * full_budget)
                 settings = {**DEFAULT_SETTINGS, "budget_m": target}
                 candidate = sample(strategy, rng.randrange(2**31), base, settings)
@@ -590,12 +590,16 @@ def _offspring(state: dict, base, *, diagnostics: dict | None = None,
                 child = left
             if rng.random() < MUTATION_PROBABILITY:
                 steps = rng.choice(MUTATION_STEPS)
+                additions_before = diagnostics.get("mutation_add_patch", 0)
                 for _ in range(steps):
                     child = mutate(child, eligible=base.eligible, network=base.network,
                                    index=base.index, budget_m=state["budget_m"],
                                    rng=rng, context=context, diagnostics=diagnostics)
                 diagnostics["mutation_steps"] = diagnostics.get("mutation_steps", 0) + steps
-                label = ("spatial_crossover+" if len(parents) > 1 else "") + "local_mutation"
+                mutation_label = ("patch_addition_mutation"
+                                  if diagnostics.get("mutation_add_patch", 0) > additions_before
+                                  else "local_mutation")
+                label = ("spatial_crossover+" if len(parents) > 1 else "") + mutation_label
         except ValueError as exc:
             if str(exc) != "Cannot repair offspring with current operators":
                 raise
@@ -687,6 +691,8 @@ def _write_history(dataset: Path, history: list[dict]) -> None:
             "evaluated_individuals", "new_simulations",
             "mean_budget_km", "max_budget_km", "mean_segment_jaccard",
             "failed_evaluations", "preflight_rejections",
+            "mean_successful_fitness", "best_budget_km", "top10_mean_budget_km",
+            "n_budget_ge25km", "n_successful_ge25km", "n_budget_ge40km",
         ))
         writer.writeheader()
         writer.writerows(history)
@@ -726,7 +732,17 @@ def advance(args: argparse.Namespace) -> None:
         if value is None:
             value = _json(path/'scenario.json')['budget_used_m']
         lengths.append(float(value)/1000)
+    valid_indices = [i for i, score in enumerate(scores) if score >= 0]
+    ranked_valid = sorted(valid_indices, key=lambda i: (-scores[i], state['population'][i]))
+    top = ranked_valid[:10]
     summary = {
+        'mean_successful_fitness': (sum(scores[i] for i in valid_indices) / len(valid_indices)
+                                    if valid_indices else None),
+        'best_budget_km': lengths[ranked_valid[0]] if ranked_valid else None,
+        'top10_mean_budget_km': sum(lengths[i] for i in top) / len(top) if top else None,
+        'n_budget_ge25km': sum(v >= 25 for v in lengths),
+        'n_successful_ge25km': sum(lengths[i] >= 25 for i in valid_indices),
+        'n_budget_ge40km': sum(v >= 40 for v in lengths),
         'mean_budget_km': sum(lengths)/len(lengths),
         'max_budget_km': max(lengths),
         'mean_segment_jaccard': sum(similarities)/len(similarities),
@@ -751,7 +767,9 @@ def advance(args: argparse.Namespace) -> None:
     _write_best(dataset, state)
     print(f"Completed generation {state['generation']}: best={summary['best_fitness']:.6f}, "
           f"mean={summary['mean_fitness']:.6f}; mean budget={summary['mean_budget_km']:.2f} km; "
-          f"mean segment Jaccard={summary['mean_segment_jaccard']:.3f}", flush=True)
+          f"mean segment Jaccard={summary['mean_segment_jaccard']:.3f}; "
+          f"best budget={summary['best_budget_km']} km; "
+          f">=25 km: {summary['n_successful_ge25km']}/{summary['n_budget_ge25km']} successful", flush=True)
     if state["generation"] + 1 == state["generations"]:
         state["phase"] = "complete"
         _write(state_path, state)

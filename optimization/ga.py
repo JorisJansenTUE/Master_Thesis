@@ -21,7 +21,7 @@ from network_sampling.validation.connectivity import check_connectivity
 
 # Target budgets for immigrants: fractions of the GA's MAXIMUM budget.
 # The independent samplers remain unchanged; they receive a smaller target.
-IMMIGRANT_BUDGET_FRACTIONS = ((0.05, 0.20), (0.20, 0.47), (0.47, 1.0))
+IMMIGRANT_BUDGET_FRACTIONS = ((0.50, 0.67), (0.67, 0.83), (0.83, 1.0))
 
 
 def configuration_hash(individual: list[Intervention]) -> str:
@@ -195,19 +195,73 @@ def _variants_on_segment(ctx, sid, old=None):
     return [iv for iv in ctx.by_segment.get(sid, ()) if iv != old]
 
 
+def _grow_addition_patch(parent, ctx: SpatialContext, index, budget_m: float,
+                         rng: random.Random) -> list[Intervention]:
+    """Propose one connected patch of new physical streets within spare budget.
+
+    Usually grow next to an existing intervention; sometimes seed a new area.
+    Eligibility is inherited from ctx. The caller performs the usual repair
+    and verifies the surviving patch before accepting it.
+    """
+    remaining = budget_m - _segment_cost(parent, index)
+    target = min(remaining, rng.uniform(0.03, 0.12) * budget_m)
+    if target <= 0:
+        return []
+    present = _segment_ids(parent)
+    available = {sid for sid in ctx.by_segment if sid not in present
+                 and 0 < float(index.get(sid).length_m) <= target + 1e-6}
+    if not available:
+        return []
+    adjacent = {sid for old in present for sid in ctx.neighbors.get(old, ())
+                if sid in available}
+    seed_pool = adjacent if adjacent and rng.random() < 0.70 else available
+    frontier = {rng.choice(sorted(seed_pool))}
+    patch = []
+    used = 0.0
+    while frontier:
+        sid = rng.choice(sorted(frontier))
+        frontier.remove(sid)
+        available.discard(sid)
+        cost = float(index.get(sid).length_m)
+        if used + cost > target + 1e-6:
+            continue
+        patch.append(rng.choice(ctx.by_segment[sid]))
+        used += cost
+        frontier.update(n for n in ctx.neighbors.get(sid, ()) if n in available)
+        if used >= target - 1e-6:
+            break
+    return patch
+
+
+def _one_connected_patch(segments: set[str], ctx: SpatialContext) -> bool:
+    if not segments:
+        return False
+    visited = set()
+    frontier = [min(segments)]
+    while frontier:
+        sid = frontier.pop()
+        if sid in visited:
+            continue
+        visited.add(sid)
+        frontier.extend(n for n in ctx.neighbors.get(sid, ())
+                        if n in segments and n not in visited)
+    return visited == segments
+
+
 def mutate(
     parent: list[Intervention], *, eligible: list[Intervention], network,
     index, budget_m: float, rng: random.Random, max_attempts: int = 18,
     context: SpatialContext | None = None, diagnostics: dict | None = None,
 ) -> list[Intervention]:
-    """Local extend/trim/shift/variant and occasional new component mutation."""
+    """Local changes and connected patch addition/removal."""
     if max_attempts < 1:
         raise ValueError("max_attempts must be positive")
     ctx = context or build_spatial_context(eligible, index)
     parent_key = configuration_hash(parent)
     by_present = _segment_ids(parent)
     ops = ["extend", "extend", "trim", "trim", "shift", "shift",
-           "variant", "variant", "new_component", "remove_patch"]
+           "variant", "variant", "new_component", "remove_patch",
+           "add_patch", "add_patch"]
     for _ in range(max_attempts):
         op = rng.choice(ops)
         proposed = list(parent)
@@ -218,6 +272,11 @@ def mutate(
             if sid is None:
                 continue
             proposed.append(rng.choice(_variants_on_segment(ctx, sid)))
+        elif op == "add_patch":
+            additions = _grow_addition_patch(parent, ctx, index, budget_m, rng)
+            if not additions:
+                continue
+            proposed.extend(additions)
         elif op == "new_component":
             if not eligible:
                 continue
@@ -270,6 +329,18 @@ def mutate(
             if str(exc) != "Cannot repair offspring with current operators":
                 raise
             continue
+        if op == "add_patch":
+            # Repair may remove additions (including an interior street). Do
+            # not accept a disconnected patch or loss of inherited genes.
+            if not set(parent).issubset(child):
+                continue
+            added_segments = _segment_ids(child) - by_present
+            if not _one_connected_patch(added_segments, ctx):
+                continue
+            if diagnostics is not None:
+                added_m = sum(float(index.get(sid).length_m) for sid in added_segments)
+                diagnostics["mutation_add_patch_total_m"] = (
+                    diagnostics.get("mutation_add_patch_total_m", 0.0) + added_m)
         if configuration_hash(child) != parent_key:
             if diagnostics is not None:
                 label = "mutation_" + op

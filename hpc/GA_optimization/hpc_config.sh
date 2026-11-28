@@ -13,7 +13,7 @@ HISTORICAL_BASELINE="${HISTORICAL_BASELINE:-$HISTORICAL_DATASET/baseline_00000}"
 
 # New optimisation results, separate from the historical dataset and Git tree.
 # Isolate the new run from prior 15-minute/linear-fitness GA checkpoints.
-GA_DATASET="${GA_DATASET:-$BASE/GA_Optimization/ga_trial08_20min_park0_50km_seed42}"
+GA_DATASET="${GA_DATASET:-$BASE/GA_Optimization/ga_trial08_20min_park0_50km_seed42_explore}"
 WARM_START_FILE="${WARM_START_FILE:-$GA_DATASET/warm_start.json}"
 # New Trial 08 reference; legacy reference and accessibility caches are untouched.
 REFERENCE_FILE="${REFERENCE_FILE:-$BASE/GA_Optimization/references/sufficiency_reference_20min_park0_low_statpop.json}"
@@ -54,7 +54,7 @@ GA_POPULATION="${GA_POPULATION:-80}"
 GA_GENERATIONS="${GA_GENERATIONS:-80}"
 GA_SEED="${GA_SEED:-42}"
 GA_ELITES="${GA_ELITES:-2}"
-GA_IMMIGRANTS="${GA_IMMIGRANTS:-0.10}"
+GA_IMMIGRANTS="${GA_IMMIGRANTS:-0.20}"
 GA_MAX_PARALLEL="${GA_MAX_PARALLEL:-80}"
 # 1 = remove bulky raw MATSim files after successful, checked compaction.
 GA_DELETE_RAW="${GA_DELETE_RAW:-1}"
