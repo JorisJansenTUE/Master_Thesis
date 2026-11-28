@@ -17,6 +17,13 @@ module load Python/3.10.13
 module load EESSI/2026.06
 module load Java/25.36
 
+#temporary adds for test set
+export GA_DATASET="/home/20201733/locarno_ETH_Model/GA_Optimization/ga_trial08_20min_park0_50km_seed123_test"
+export GA_SEED=123
+export GA_GENERATIONS=50
+export GA_NO_WARM_START=1
+export WARM_START_FILE="$GA_DATASET/warm_start.json"
+
 cd "$HPC_REPO"
 [[ -x "$PYTHON_BIN" ]] || { echo "Python not executable: $PYTHON_BIN" >&2; exit 1; }
 for f in "$REFERENCE_FILE" "$HISTORICAL_BASELINE/network.xml.gz" \
