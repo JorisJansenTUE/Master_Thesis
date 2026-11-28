@@ -6,13 +6,13 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=02:00:00
-#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis_delay/slurm_logs/gnn_delay_eval_%j.out
-#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis_delay/slurm_logs/gnn_delay_eval_%j.err
+#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_retrain_eval_%j.out
+#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_retrain_eval_%j.err
 set -Eeuo pipefail
 
 # Source files are read from the delay experiment worktree.
-PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis_delay
-GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt_delay}"
+PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis
+GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt_delay_expanded_v2}"
 VENV="${VENV:-/vast.mnt/home/20201733/Master_Thesis/.venv-gnn}"
 RUN_TAG="${RUN_TAG:-tt_delay_001}"
 EVAL_SPLIT="${EVAL_SPLIT:-val}"
