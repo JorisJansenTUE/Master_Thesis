@@ -20,38 +20,36 @@ from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-from accessibility.inputs.grid import destination_settings as dest
 from network_sampling.dataset.generate import DEFAULT_SETTINGS, load_baseline
 from network_sampling.interventions.intervention_types import (
     Intervention, InterventionType, RoadSpaceVariant,
 )
-from optimization.fitness import FITNESS_VERSION, evaluate_scenario
+from optimization.fitness_trial08 import (FITNESS_VERSION, OUTPUT_DIR, SETTINGS, evaluate_scenario,
+                                          sha)
 from optimization.ga import configuration_hash, validate_individual
 
 # ---------------------------- Editable settings ----------------------------
 DATASET = Path("data/Simulated_Runs_v2")
-OUTPUT = Path("data/GA_Pilot/warm_start.json")
+OUTPUT = Path("data/GA_Trial08/warm_start.json")
 BASELINE_NAME = "baseline_00000"
-SPATIAL_DIR = dest.spatial_dir()
-REFERENCE_FILE = dest.baseline_reference_file(BASELINE_NAME).with_name(
-    "sufficiency_reference_20min_park5.json"
-)
-BUDGET_M = 5000.0
+SPATIAL_DIR = Path("data/accessibility/base_mapping/spatial_baseline")
+REFERENCE_FILE = Path("data/GA_Trial08/sufficiency_reference_20min_park0_low_statpop.json")
+BUDGET_M = 50000.0
 WARM_START_COUNT = 8                  # for example, 8 of a 40-individual population
 MAX_SEGMENT_OVERLAP = 0.70           # maximum Jaccard similarity of street segments
 
 # Match your existing numerical fitness settings (Step 4).
-MODE_WEIGHTS = {"car": 0.0, "bike": 1.0, "pt": 1.0}
+MODE_WEIGHTS = {"car": 1.0, "bike": 1.0, "pt": 1.0}
 TIME_WEIGHTS = {20.0: 1.0}
-SUFFICIENCY_LEVEL = "high"
+SUFFICIENCY_LEVEL = "low"
 HOUR_START = 8
 LINKSTATS_STATISTIC = "avg"
 BIKE_SPEED_M_S = 4.17
 PT_TRANSFER_PENALTY_S = 300.0
 ORIGIN_SNAP_M = 500.0
 JOB_SNAP_M = 300.0
-CAR_PARKING_PENALTY_S = 300.0
-CAR_SUFFICIENCY_TOLERANCE_PP = 5.0
+CAR_PARKING_PENALTY_S = 0.0
+CAR_CONSTRAINT_ENABLED = False
 # ---------------------------------------------------------------------------
 
 
@@ -91,13 +89,16 @@ def load_warm_start(path: str | Path) -> tuple[list[list[Intervention]], dict[st
         raise ValueError("Warm-start file schema or fitness version is not current")
     individuals = []
     historical_fitness = {}
+    seen = set()
     for seed in payload["seeds"]:
         individual = _individual_from_records(seed["interventions"])
         fingerprint = configuration_hash(individual)
-        if fingerprint != seed["config_hash"] or fingerprint in historical_fitness:
+        if fingerprint != seed["config_hash"] or fingerprint in seen:
             raise ValueError("Invalid/duplicate warm-start configuration fingerprint")
         individuals.append(individual)
-        historical_fitness[fingerprint] = float(seed["fitness"])
+        seen.add(fingerprint)
+        if seed["fitness"] is not None:
+            historical_fitness[fingerprint] = float(seed["fitness"])
     return individuals, historical_fitness
 
 
@@ -113,41 +114,24 @@ def _same_simulation_settings(baseline: dict, candidate: dict) -> bool:
     # Different iteration counts or linkstats windows are not comparable.
     for field in ("last_iteration", "linkstats_interval", "linkstats_average_iterations"):
         a, b = baseline.get(field), candidate.get(field)
-        if a is not None and b is not None and a != b:
+        if a is not None and a != b:
             return False
     return True
 
 
 def _evaluate(path: Path, spatial_dir: Path, reference_file: Path,
               existing_only: bool) -> dict:
-    cached = ((path / "accessibility" / "sufficiency_summary.csv").is_file()
-              and (path / "accessibility" / "accessibility_by_hexagon.csv.gz").is_file())
-    if existing_only and not cached:
-        raise FileNotFoundError("no saved accessibility; --existing-only was requested")
-
-    kwargs = dict(
-        baseline_name=BASELINE_NAME,
-        mode_weights=MODE_WEIGHTS, time_weights=TIME_WEIGHTS,
-        level=SUFFICIENCY_LEVEL, hour_start=HOUR_START,
-        linkstats_statistic=LINKSTATS_STATISTIC,
-        bike_speed_m_s=BIKE_SPEED_M_S, pt_transfer_penalty_s=PT_TRANSFER_PENALTY_S,
-        origin_snap_m=ORIGIN_SNAP_M, job_snap_m=JOB_SNAP_M,
-        car_parking_penalty_s=CAR_PARKING_PENALTY_S,
-        car_sufficiency_tolerance_pp=CAR_SUFFICIENCY_TOLERANCE_PP,
-    )
+    cached = (path / OUTPUT_DIR / "fitness.json").is_file()
     if cached:
         try:
-            return evaluate_scenario(path, spatial_dir, reference_file,
-                                     score_only=True, **kwargs)
+            return evaluate_scenario(path, spatial_dir, reference_file, score_only=True)
         except (ValueError, FileNotFoundError):
-            # Incompatible cached time/parking/shortfall data require fresh routing.
             if existing_only:
                 raise
-            print(f"  Recalculating incompatible accessibility: {path.name}", flush=True)
+            print(f"Recalculating incompatible Trial 08 cache: {path.name}", flush=True)
     if existing_only:
-        raise FileNotFoundError("cannot calculate accessibility with --existing-only")
-    return evaluate_scenario(path, spatial_dir, reference_file,
-                             score_only=False, **kwargs)
+        raise FileNotFoundError("No valid Trial 08 cache")
+    return evaluate_scenario(path, spatial_dir, reference_file)
 
 
 def _score_worker(task: tuple[Path, Path, Path, bool]):
@@ -171,7 +155,7 @@ def _segment_similarity(a: set[str], b: set[str]) -> float:
 def _write_ranking(path: Path, rows: list[dict], selected_hashes: set[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     headers = (
-        "rank", "scenario", "strategy", "fitness", "budget_used_m",
+        "rank", "scenario", "source_path", "strategy", "fitness", "budget_used_m",
         "intervention_count", "config_hash", "car_score", "bike_score",
         "pt_score", "car_sufficient_share", "car_baseline_sufficient_share",
         "car_violation_pp", "feasible",
@@ -184,7 +168,7 @@ def _write_ranking(path: Path, rows: list[dict], selected_hashes: set[str]) -> N
         for rank, row in enumerate(rows, 1):
             component = {x["mode"]: x for x in row["score"]["components"]}
             writer.writerow({
-                "rank": rank, "scenario": row["scenario"], "strategy": row["strategy"],
+                "rank": rank, "scenario": row["scenario"], "source_path": row["source_path"], "strategy": row["strategy"],
                 "fitness": row["fitness"], "budget_used_m": row["budget_used_m"],
                 "intervention_count": len(row["interventions"]),
                 "config_hash": row["config_hash"],
@@ -205,6 +189,8 @@ def build_warm_start(
     *, count: int, budget_m: float, max_overlap: float, limit: int = 0,
     existing_only: bool = False, workers: int = 1,
     exclude_test_split: Path | None = None,
+    trial_dir: Path | None = None, shortlist: int = 80,
+    bike_seeds: list[Path] | None = None, bike_count: int = 8,
 ) -> dict:
     """Score historical completed scenarios and export valid, diverse GA seeds."""
     if workers < 1:
@@ -212,6 +198,8 @@ def build_warm_start(
     dataset = dataset.resolve(strict=True)
     excluded = set()
     excluded_sha256 = None
+    excluded_paths = set()
+    source_manifest_sha256 = None
     if exclude_test_split is not None:
         split_path = exclude_test_split.resolve(strict=True)
         split_data = _read_json(split_path)
@@ -219,18 +207,70 @@ def build_warm_start(
         if not isinstance(test_ids, list) or not test_ids or len(test_ids) != len(set(test_ids)):
             raise ValueError(f'Invalid frozen GNN test split: {split_path}')
         excluded = set(test_ids)
+        manifest_path = split_path.parent / 'preparation_metadata' / 'source_manifest.csv'
+        if manifest_path.is_file():
+            with manifest_path.open(newline='') as f:
+                manifest = {row['scenario']: row for row in csv.DictReader(f)}
+            if not excluded <= set(manifest):
+                raise ValueError('Frozen test IDs missing from GNN source manifest')
+            for sid in test_ids:
+                row = manifest[sid]
+                if row['split'] != 'test':
+                    raise ValueError('GNN split/source manifest disagreement')
+                excluded_paths.add(Path(row['source']).resolve())
+            source_manifest_sha256 = sha(manifest_path)
+        elif 'expanded' in split_path.parent.name:
+            raise FileNotFoundError(f'Missing source manifest for expanded GNN: {manifest_path}')
         excluded_sha256 = hashlib.sha256(split_path.read_bytes()).hexdigest()
         print(f'Excluding {len(excluded)} held-out GNN test scenarios from GA warm start', flush=True)
     baseline_dir = dataset / BASELINE_NAME
     baseline_metadata = _read_json(baseline_dir / "scenario.json")
     if not baseline_metadata.get("baseline_hashes"):
         raise ValueError("Baseline scenario.json has no baseline hashes; cannot compare datasets")
+    completed_hashes = {"network": sha(baseline_dir / "network.xml.gz"),
+                        "schedule": sha(baseline_dir / "transit_schedule.xml.gz")}
     baseline_status = _completed_status(baseline_dir)
     if baseline_status is None:
         raise RuntimeError(f"Baseline simulation must be completed: {baseline_dir}")
     print("Scoring the fixed baseline...", flush=True)
     baseline_score = _evaluate(baseline_dir, spatial_dir, reference_file, existing_only)
 
+    if abs(baseline_score['fitness'] - 0.89555067) > 1e-8:
+        raise ValueError(f"Trial 08 baseline benchmark mismatch: {baseline_score['fitness']:.10f}")
+    trial_scores = {}
+    if trial_dir is not None:
+        trial = _read_json(trial_dir / 'experiment.json')
+        cfg = trial['new_settings']
+        expected = {'MODE_WEIGHTS': SETTINGS['mode_weights'], 'TIME_WEIGHTS': {'20.0': 1.0},
+                    'SUFFICIENCY_FRACTION': .5, 'SHORTFALL_EXPONENT': 2,
+                    'CAR_CONSTRAINT_ENABLED': False, 'CAR_PARKING_PENALTY_S': 0}
+        if any(cfg[k] != v for k,v in expected.items() if k != 'TIME_WEIGHTS') or {float(k): v for k,v in cfg['TIME_WEIGHTS'].items()} != {20.:1.}:
+            raise ValueError('Not a Trial 08 experiment')
+        for k, filename in [('population_sha256','population_by_hexagon.csv'), ('spatial_origins_sha256','origins.csv'), ('spatial_jobs_sha256','jobs.csv')]:
+            if trial[k] != sha(spatial_dir / filename):
+                raise ValueError(f'Trial 08 input mismatch: {filename}')
+        for key in ('hour_start','linkstats_statistic','bike_speed_m_s','pt_transfer_penalty_s','origin_snap_m','job_snap_m','car_parking_penalty_s'):
+            if cfg[key.upper()] != SETTINGS[key]:
+                raise ValueError(f'Trial 08 routing setting mismatch: {key}')
+        if abs(trial['common_low_threshold_jobs'] - baseline_score['threshold_jobs']) > 1e-6:
+            raise ValueError('Trial 08 threshold mismatch')
+        if abs(trial['baseline_score']['raw_fitness'] - baseline_score['fitness']) > 1e-8:
+            raise ValueError('Trial 08 baseline score mismatch')
+        import pandas as pd
+        for row in pd.read_csv(trial_dir/'fitness_scores.csv.gz').sort_values('fitness', ascending=False).itertuples():
+            source = Path(row.source)
+            path = source.parent.parent if source.parent.name == 'accessibility' else source.parent
+            if path.name != row.scenario:
+                raise ValueError(f'Trial 08 source/scenario mismatch: {source}')
+            trial_scores[path] = float(row.fitness)
+    # Exclude exact held-out configurations as well as IDs wherever source metadata is available.
+    excluded_hashes = set()
+    for path in set(trial_scores) | {dataset / x for x in excluded} | excluded_paths:
+        if (path.name in excluded or path.resolve() in excluded_paths) and (path/'interventions.json').is_file():
+            excluded_hashes.add(configuration_hash(_individual_from_records(_read_json(path/'interventions.json'))))
+    for path in excluded_paths:
+        if not (path / "interventions.json").is_file():
+            raise FileNotFoundError(f"Missing held-out source interventions: {path}")
     # Stage 1: filter cheap metadata and deduplicate *before* expensive routing.
     # Each unique scenario is then independent and can run in a process pool.
     queued_hashes: set[str] = set()
@@ -240,14 +280,16 @@ def build_warm_start(
     considered = 0
     paths = sorted(p for p in dataset.iterdir() if p.is_dir() and p.name != BASELINE_NAME
                    and (p / "scenario.json").is_file())
+    if trial_scores:
+        paths = list(trial_scores)
     warnings_shown = 0
     for path in paths:
         try:
-            if path.name in excluded:
+            if path.name in excluded or path.resolve() in excluded_paths:
                 skips['held-out GNN test scenario'] += 1
                 continue
             metadata = _read_json(path / "scenario.json")
-            if metadata.get("baseline_hashes") != baseline_metadata.get("baseline_hashes"):
+            if metadata.get("baseline_hashes") not in (baseline_metadata.get("baseline_hashes"), completed_hashes):
                 skips["different baseline"] += 1
                 continue
             if not (path / "interventions.json").is_file():
@@ -275,10 +317,13 @@ def build_warm_start(
                 continue
             individual = _individual_from_records(records)
             key = configuration_hash(individual)
+            if key in excluded_hashes:
+                skips["held-out GNN configuration"] += 1
+                continue
             if key in queued_hashes:
                 skips["duplicate configuration"] += 1
                 continue
-            if limit and considered >= limit:
+            if (limit and considered >= limit) or (trial_scores and shortlist and considered >= shortlist):
                 break
             considered += 1
             queued_hashes.add(key)
@@ -288,6 +333,7 @@ def build_warm_start(
                 "config_hash": key, "budget_used_m": budget,
                 "interventions": records,
                 "segments": {iv.segment_id for iv in individual},
+                "expected_trial_fitness": trial_scores.get(path),
             })
         except (OSError, ValueError, KeyError, TypeError, ZeroDivisionError, RuntimeError) as exc:
             skips[type(exc).__name__] += 1
@@ -310,8 +356,11 @@ def build_warm_start(
                     print(f"  SKIP {candidate['scenario']}: {message}", flush=True)
                     warnings_shown += 1
                 continue
+            expected = candidate['expected_trial_fitness']
+            if expected is not None and abs(float(score['fitness']) - expected) > 1e-8:
+                raise ValueError(f"Trial 08 mismatch for {candidate['scenario']}: {score['fitness']} vs {expected}")
             row = {k: v for k, v in candidate.items() if k != "path"}
-            row.update(fitness=float(score["fitness"]), score=score)
+            row.update(source_path=str(candidate["path"]), fitness=float(score["fitness"]), score=score)
             rows.append(row)
             if len(rows) % 20 == 0:
                 print(f"  Scored {len(rows)}/{len(candidates)} candidates", flush=True)
@@ -358,23 +407,19 @@ def build_warm_start(
     payload = {
         "version": 1, "fitness_version": FITNESS_VERSION,
         "excluded_test_split_sha256": excluded_sha256,
+        "excluded_source_manifest_sha256": source_manifest_sha256,
         "excluded_test_scenarios_count": len(excluded),
         "source_dataset": str(dataset), "baseline_name": BASELINE_NAME,
         "baseline_hashes": baseline_metadata.get("baseline_hashes"),
         "reference_sha256": hashlib.sha256(reference_file.read_bytes()).hexdigest(),
         "baseline_attachment_sha256": baseline_score["baseline_attachment_sha256"],
         "budget_m": budget_m, "selection_max_segment_overlap": max_overlap,
-        "fitness_settings": {
-            "mode_weights": MODE_WEIGHTS, "time_weights": {"20": 1.0},
-            "sufficiency_level": SUFFICIENCY_LEVEL,
-            "car_parking_penalty_s": CAR_PARKING_PENALTY_S,
-            "car_sufficiency_tolerance_pp": CAR_SUFFICIENCY_TOLERANCE_PP,
-        },
+        "fitness_settings": SETTINGS,
         "historical_baseline_fitness": baseline_score["fitness"],
         "scored_candidates": len(rows), "skipped": dict(skips),
         "seeds": [
             {
-                "scenario": row["scenario"], "strategy": row["strategy"],
+                "scenario": row["scenario"], "source_path": row["source_path"], "strategy": row["strategy"],
                 "config_hash": row["config_hash"], "fitness": row["fitness"],
                 "budget_used_m": row["budget_used_m"],
                 "interventions": row["interventions"],
@@ -382,6 +427,59 @@ def build_warm_start(
             for row in selected
         ],
     }
+    # Bicycle-only winners are NEW unevaluated seeds, never historical scores.
+    # Use their existing validated intervention records, then diversify with the same GA mutation.
+    import random
+    from optimization.ga import mutate, build_spatial_context
+    rng = random.Random(42)
+    context = build_spatial_context(base.eligible, base.index)
+    bike_parents = []
+    seen = set(selected_hashes) | excluded_hashes
+    def add_bike(individual, source):
+        key = configuration_hash(individual)
+        valid, reason = validate_individual(individual, eligible=base.eligible, network=base.network,
+                                           index=base.index, budget_m=budget_m)
+        if not valid or not individual or key in seen:
+            return False
+        seen.add(key)
+        payload['seeds'].append(dict(scenario=str(source), strategy='bicycle_seed', config_hash=key,
+            fitness=None, interventions=[dict(segment_id=str(iv.segment_id), intervention_type=iv.intervention_type.value,
+            road_space_variant=iv.road_space_variant.value if iv.road_space_variant else None,
+            target_link_ids=list(iv.target_link_ids)) for iv in individual]))
+        return True
+    for path in bike_seeds or []:
+        raw = _read_json(path)
+        manifest = _read_json(path.parent/'experiment_manifest.json')
+        if manifest.get('network_sha256') != completed_hashes['network'] or manifest.get('schedule_sha256') != completed_hashes['schedule']:
+            raise ValueError(f'Bicycle seed belongs to another baseline: {path}')
+        if not raw.get('java_passed'):
+            raise ValueError(f'Bicycle seed was not Java validated: {path}')
+        individual = _individual_from_records(raw['interventions'])
+        valid, reason = validate_individual(individual, eligible=base.eligible, network=base.network,
+                                           index=base.index, budget_m=budget_m)
+        if valid:
+            bike_parents.append((individual, path))
+            if len(payload['seeds'])-len(selected) < bike_count:
+                add_bike(individual, path)
+        else:
+            print(f'SKIP bicycle seed {path}: {reason}', flush=True)
+    for attempt in range(100 if bike_parents else 0):
+        if len(payload['seeds'])-len(selected) >= bike_count:
+            break
+        child, path = rng.choice(bike_parents)
+        try:
+            for _ in range(rng.choice((4,8,12))):
+                child = mutate(child, eligible=base.eligible, network=base.network, index=base.index,
+                               budget_m=budget_m, rng=rng, context=context)
+            add_bike(child, path)
+        except ValueError:
+            continue
+    if len(selected) < count:
+        print(f"WARNING: only {len(selected)}/{count} historical seeds; increase WARM_SHORTLIST if needed", flush=True)
+    if len(payload['seeds'])-len(selected) < bike_count:
+        print("WARNING: fewer bicycle seeds than requested; remaining positions sampled normally", flush=True)
+    print(f"Selected {len(selected)} historical + {len(payload['seeds'])-len(selected)} unevaluated bicycle-derived seeds", flush=True)
+    payload['trial_scores_sha256'] = sha(trial_dir/'fitness_scores.csv.gz') if trial_dir else None
     _write_json(output, payload)
     print(f"Scored {len(rows)} comparable configurations; skipped {sum(skips.values())}.")
     print(f"Baseline fitness: {baseline_score['fitness']:.6f}")
@@ -413,14 +511,21 @@ def main() -> None:
                         help="splits.json with frozen test IDs to exclude from historical GA seeds")
     parser.add_argument("--workers", type=int, default=1,
                         help="Parallel historical accessibility processes (default: 1)")
+    parser.add_argument("--trial-dir", type=Path, required=True)
+    parser.add_argument("--shortlist", type=int, default=80)
+    parser.add_argument("--bike-seed", type=Path, action="append", default=[])
+    parser.add_argument("--bike-count", type=int, default=8)
     args = parser.parse_args()
+    if args.shortlist < 0 or args.bike_count < 0:
+        parser.error("shortlist and bike-count must be nonnegative")
     if args.budget < 0 or args.count < 1 or not 0 <= args.max_overlap <= 1 or args.limit < 0 or args.workers < 1:
         parser.error("Budget must be nonnegative, count positive, overlap in [0,1], limit >= 0, workers >= 1")
     build_warm_start(args.dataset, args.output, args.spatial_dir, args.reference,
                      count=args.count, budget_m=args.budget,
                      max_overlap=args.max_overlap, limit=args.limit,
                      existing_only=args.existing_only, workers=args.workers,
-                     exclude_test_split=args.exclude_test_split)
+                     exclude_test_split=args.exclude_test_split, trial_dir=args.trial_dir,
+                     shortlist=args.shortlist, bike_seeds=args.bike_seed, bike_count=args.bike_count)
 
 
 if __name__ == "__main__":

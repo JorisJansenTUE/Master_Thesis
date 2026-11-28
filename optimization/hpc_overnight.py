@@ -70,10 +70,10 @@ def write_json(path: Path, content: dict) -> None:
 
 def invoke(command: list[str], *, capture: bool = False) -> str:
     log("RUN " + " ".join(command))
-    result = subprocess.run(command, text=True, capture_output=True, check=False)
-    if result.stdout:
+    result = subprocess.run(command, text=True, capture_output=capture, check=False)
+    if capture and result.stdout:
         print(result.stdout, end="" if result.stdout.endswith("\n") else "\n", flush=True)
-    if result.stderr:
+    if capture and result.stderr:
         print(result.stderr, end="" if result.stderr.endswith("\n") else "\n", file=sys.stderr, flush=True)
     if result.returncode:
         raise RuntimeError(f"Command exited {result.returncode}: {command!r}")
@@ -134,7 +134,7 @@ def submission_command(args: argparse.Namespace, manifest: Path) -> list[str]:
 
 def step_command(args: argparse.Namespace) -> list[str]:
     cmd = [str(args.python), "-m", "optimization.run", "step",
-           "--dataset", str(args.dataset)]
+           "--dataset", str(args.dataset), "--fitness-workers", str(args.fitness_workers)]
     if args.penalize_failed:
         cmd.append("--penalize-failed")
     return cmd
@@ -163,13 +163,14 @@ def main() -> None:
     p.add_argument("--elites", required=True, type=int)
     p.add_argument("--immigrants", required=True, type=float)
     p.add_argument("--max-parallel", required=True, type=int)
+    p.add_argument("--fitness-workers", type=int, default=1)
     p.add_argument("--delete-raw", required=True, type=int, choices=(0, 1))
     p.add_argument("--penalize-failed", required=True, type=int, choices=(0, 1))
     p.add_argument("--stop-margin-min", required=True, type=int)
     p.add_argument("--poll-sec", required=True, type=int)
     p.add_argument("--dry-run", required=True, type=int, choices=(0, 1))
     args = p.parse_args()
-    if args.max_parallel < 1 or args.poll_sec < 1 or args.stop_margin_min < 5:
+    if args.max_parallel < 1 or args.fitness_workers < 1 or args.poll_sec < 1 or args.stop_margin_min < 5:
         p.error("max-parallel/poll-sec must be positive and stop margin >=5 minutes")
     job_walltime_s = actual_job_walltime_s()
     if args.stop_margin_min * 60 + HARD_EXIT_BUFFER_S >= job_walltime_s:
@@ -205,6 +206,9 @@ def main() -> None:
 
     while True:
         state = read_json(state_path)
+        from optimization.run import FITNESS_VERSION, OPERATOR_VERSION, _fitness_settings
+        if state.get("fitness_version") != FITNESS_VERSION or state.get("operator_version") != OPERATOR_VERSION or state.get("fitness_settings") != _fitness_settings():
+            raise ValueError("Incompatible GA checkpoint; do not reuse an old output directory")
         gen, pending = state_summary(state)
         log(f"Generation {gen + 1}/{state['generations']}: "
             f"phase={state['phase']}, waiting for {pending} fitness values")

@@ -42,7 +42,8 @@ def main() -> None:
     archive = state["archive"]
     fitness_version = state.get("fitness_version")
 
-    baseline_fitness_file = Path(state["baseline"]) / "accessibility" / "fitness.json"
+    output_dir = "accessibility_trial08" if str(fitness_version).startswith("trial08_") else "accessibility"
+    baseline_fitness_file = Path(state["baseline"]) / output_dir / "fitness.json"
     baseline_payload = load_json(baseline_fitness_file)
     baseline = None
     if baseline_payload and baseline_payload.get("fitness_version") == fitness_version:
@@ -60,10 +61,12 @@ def main() -> None:
         path = None
         if entry.get("scenario"):
             path = root / entry["scenario"]
+        elif entry.get("historical_path"):
+            path = Path(entry["historical_path"])
         elif historical is not None and entry.get("historical_scenario"):
             path = historical / entry["historical_scenario"]
         meta = load_json(path / "scenario.json") if path else None
-        scored = load_json(path / "accessibility" / "fitness.json") if path else None
+        scored = load_json(path / output_dir / "fitness.json") if path else None
         parts = {}
         if scored and scored.get("fitness_version") == fitness_version:
             parts = {x["mode"]: x["mode_score"] for x in scored.get("components", [])}

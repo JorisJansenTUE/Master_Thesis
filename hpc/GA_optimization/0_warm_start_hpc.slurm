@@ -1,13 +1,13 @@
 #!/bin/bash -l
-#SBATCH --job-name=ga-warmstart
+#SBATCH --job-name=ga-trial08-warmstart
 #SBATCH --partition=mech-cst-mov.cpu.q
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=4G
+#SBATCH --mem=32G
 #SBATCH --time=05:00:00
-#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/ga-warmstart_%j.out
-#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/ga-warmstart_%j.err
+#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/ga-trial08-warmstart_%j.out
+#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/ga-trial08-warmstart_%j.err
 
 set -Eeuo pipefail
 source "$SLURM_SUBMIT_DIR/hpc/GA_optimization/hpc_config.sh"
@@ -21,18 +21,20 @@ cd "$HPC_REPO"
 [[ -s "$HISTORICAL_BASELINE/network.xml.gz" ]] || { echo "Missing baseline network" >&2; exit 1; }
 [[ -s "$HISTORICAL_BASELINE/transit_schedule.xml.gz" ]] || { echo "Missing baseline schedule" >&2; exit 1; }
 [[ -s "$HISTORICAL_BASELINE/targets/linkstats.txt.gz" ]] || { echo "Missing compacted baseline linkstats" >&2; exit 1; }
-for f in origins.csv jobs.csv pt_origin_connectors.csv pt_job_connectors.csv; do
+for f in origins.csv jobs.csv pt_origin_connectors.csv pt_job_connectors.csv population_by_hexagon.csv; do
     [[ -s "$SPATIAL_DIR/$f" ]] || { echo "Missing accessibility input: $SPATIAL_DIR/$f" >&2; exit 1; }
 done
 
 mkdir -p "$(dirname -- "$WARM_START_FILE")" "$(dirname -- "$REFERENCE_FILE")"
+exec 9>"${REFERENCE_FILE}.warm.lock"
+flock -n 9 || { echo "Another Trial 08 warm-start/reference job is active" >&2; exit 1; }
 if [[ -s "$WARM_START_FILE" && "$WARM_REBUILD" != 1 ]]; then
     # In particular, never silently reuse a different budget (a previous pitfall).
     "$PYTHON_BIN" - "$WARM_START_FILE" "$GA_BUDGET_M" "$REFERENCE_FILE" \
         "$HISTORICAL_BASELINE/scenario.json" <<'PY_CHECK'
 import hashlib, json, sys
 from pathlib import Path
-from optimization.fitness import FITNESS_VERSION
+from optimization.fitness_trial08 import FITNESS_VERSION
 path, budget, reference, baseline = map(Path, sys.argv[1:])
 data = json.loads(path.read_text())
 source = json.loads(baseline.read_text())
@@ -54,6 +56,9 @@ a = json.loads(seed.read_text())
 assert a.get('excluded_test_split_sha256') == hashlib.sha256(split.read_bytes()).hexdigest(), (
     'Warm start does not match current held-out test split; set WARM_REBUILD=1'
 )
+manifest = split.parent / 'preparation_metadata' / 'source_manifest.csv'
+if manifest.is_file():
+    assert a.get('excluded_source_manifest_sha256') == hashlib.sha256(manifest.read_bytes()).hexdigest(), 'GNN source manifest changed; rebuild warm start'
 PY_SPLIT
     echo "Warm start already exists and matches baseline/budget/fitness/test exclusion: $WARM_START_FILE"
     exit 0
@@ -77,7 +82,20 @@ ARGS=(
   --limit "$WARM_LIMIT"
   --workers "${SLURM_CPUS_PER_TASK:-1}"
   --exclude-test-split "$WARM_EXCLUDE_TEST_SPLIT"
+  --trial-dir "$TRIAL08_DIR"
+  --shortlist "$WARM_SHORTLIST"
+  --bike-count "$WARM_BIKE_COUNT"
 )
 if [[ "$WARM_EXISTING_ONLY" == 1 ]]; then ARGS+=(--existing-only); fi
+# Use validated bicycle-only winners at or below 50 km, if present.
+for budget in 50 15; do
+    f="$BIKE_POTENTIAL_DIR/ga_${budget}km/best_validated.json"
+    if [[ -s "$f" ]]; then ARGS+=(--bike-seed "$f"); else echo "WARNING: missing optional bicycle seed $f"; fi
+done
+# Benchmark uses historical MATSim outputs, not new simulations. It does not
+# automatically add this scenario to the warm-start pool.
+"$PYTHON_BIN" -m optimization.validate_trial08 --trial-dir "$TRIAL08_DIR" \
+    --baseline "$HISTORICAL_BASELINE" --spatial-dir "$SPATIAL_DIR" --reference "$REFERENCE_FILE"
+
 "$PYTHON_BIN" -m optimization.warm_start "${ARGS[@]}"
 echo "Warm-start preparation finished: $WARM_START_FILE"

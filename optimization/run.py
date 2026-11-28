@@ -31,24 +31,26 @@ from optimization.ga import (
 )
 from optimization.prepare_scenario import prepare_one
 from optimization import warm_start as warm
-from optimization.fitness import FITNESS_VERSION
+from optimization.fitness_trial08 import FITNESS_VERSION, SETTINGS, validate_reference, scenario_hashes
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # -------------------- Editable local settings -----------------------------
-DATASET = Path("data/GA_Pilot")
+DATASET = Path("data/GA_Trial08")
 BASELINE = Path("data/Simulated_Runs_v2/baseline_00000")
 WARM_START = DATASET / "warm_start.json"
 SPATIAL_DIR = warm.SPATIAL_DIR
 REFERENCE_FILE = warm.REFERENCE_FILE
-BUDGET_M = 5000.0
-POPULATION_SIZE = 40
-GENERATIONS = 10               # Total, including generation 0
-SEED = 42
+BUDGET_M = 50000.0
+POPULATION_SIZE = 80
+GENERATIONS = 80               # Total, including generation 0
+SEED = 1234
 ELITES = 2
 IMMIGRANT_FRACTION = 0.10
 TOURNAMENT_SIZE = 3
 CROSSOVER_PROBABILITY = 0.40  # Prefer local improvements over mixing patches
 MUTATION_PROBABILITY = 0.80
-OPERATOR_VERSION = "spatial_v1"
+OPERATOR_VERSION = "spatial_v1_multistep_trial08"
+MUTATION_STEPS = (1, 2, 4, 8, 12)
 PREFLIGHT_MAX_REPLACEMENTS = 80  # Bound resampling per invalid candidate
 # Used by existing HPC overnight runner, which invokes `step` without jar args.
 MATSIM_JAR = Path(os.environ.get(
@@ -86,19 +88,7 @@ def _mask_path(reference: Path) -> Path:
 
 def _fitness_settings() -> dict:
     """Freeze scoring choices so a resumed GA cannot mix objectives."""
-    return {
-        "mode_weights": warm.MODE_WEIGHTS,
-        "time_weights": {"20": 1.0},
-        "sufficiency_level": warm.SUFFICIENCY_LEVEL,
-        "car_parking_penalty_s": warm.CAR_PARKING_PENALTY_S,
-        "car_sufficiency_tolerance_pp": warm.CAR_SUFFICIENCY_TOLERANCE_PP,
-        "hour_start": warm.HOUR_START,
-        "linkstats_statistic": warm.LINKSTATS_STATISTIC,
-        "bike_speed_m_s": warm.BIKE_SPEED_M_S,
-        "pt_transfer_penalty_s": warm.PT_TRANSFER_PENALTY_S,
-        "origin_snap_m": warm.ORIGIN_SNAP_M,
-        "job_snap_m": warm.JOB_SNAP_M,
-    }
+    return SETTINGS
 
 
 def _records(individual) -> list[dict]:
@@ -149,9 +139,7 @@ def _validate_inputs(baseline: Path, reference: Path, warm_file: Path | None,
             raise ValueError("Warm-start baseline sufficiency reference differs")
         if warm_payload.get("baseline_attachment_sha256") != _hash(_mask_path(reference)):
             raise ValueError("Warm-start baseline attachment mask differs")
-        expected = {key: _fitness_settings()[key] for key in
-                    ("mode_weights", "time_weights", "sufficiency_level",
-                     "car_parking_penalty_s", "car_sufficiency_tolerance_pp")}
+        expected = _fitness_settings()
         if warm_payload.get("fitness_settings") != expected:
             raise ValueError("Warm-start fitness settings differ from current GA settings")
     return metadata, status, warm_payload
@@ -356,6 +344,12 @@ def initialize(args: argparse.Namespace) -> None:
     warm_file = None if args.no_warm_start else args.warm_start
     _, baseline_status, warm_payload = _validate_inputs(args.baseline, args.reference,
                                                         warm_file, args.budget)
+    _, mask = validate_reference(args.reference, args.spatial_dir)
+    if mask['baseline_scenario_sha256'] != scenario_hashes(args.baseline):
+        raise ValueError('Trial 08 reference belongs to another baseline simulation')
+    baseline_score = warm._evaluate(args.baseline, args.spatial_dir, args.reference, True)
+    if abs(baseline_score['fitness'] - 0.89555067) > 1e-8:
+        raise ValueError('Trial 08 baseline benchmark mismatch')
     settings = {**DEFAULT_SETTINGS, "budget_m": args.budget}
     print("Loading the baseline and eligible interventions...", flush=True)
     base = load_baseline(args.baseline / "network.xml.gz",
@@ -370,7 +364,14 @@ def initialize(args: argparse.Namespace) -> None:
                                                 budget_m=args.budget)
             if not valid:
                 raise ValueError(f"Warm-start individual invalid: {reason}")
-        print(f"Warm start: {len(seeds)} historical individuals", flush=True)
+        if len(seeds) > args.population:
+            raise ValueError("Warm-start seed count exceeds population; use smaller warm manifest for pilot")
+        for seed in warm_payload['seeds']:
+            if seed['fitness'] is not None:
+                current = warm._evaluate(Path(seed['source_path']), args.spatial_dir, args.reference, True)
+                if abs(current['fitness'] - float(seed['fitness'])) > 1e-8:
+                    raise ValueError(f"Historical seed cache changed: {seed['scenario']}")
+        print(f"Warm start: {len(historical)} historical, {len(seeds)-len(historical)} unevaluated seeds", flush=True)
     population = initial_population(
         base, size=args.population, budget_m=args.budget,
         rng=random.Random(args.seed), settings=settings, initial=seeds,
@@ -387,6 +388,8 @@ def initialize(args: argparse.Namespace) -> None:
             origin = next((seed.get("scenario") for seed in warm_payload["seeds"]
                            if seed["config_hash"] == key), None)
             archive[key]["historical_scenario"] = origin
+            archive[key]["historical_path"] = next(seed.get("source_path") for seed in warm_payload["seeds"] if seed["config_hash"] == key)
+            archive[key]["budget_used_m"] = next(seed["budget_used_m"] for seed in warm_payload["seeds"] if seed["config_hash"] == key)
 
     state = {
         "version": 1,
@@ -417,6 +420,10 @@ def initialize(args: argparse.Namespace) -> None:
         "archive": archive,
         "history": [],
     }
+    # Use the same physical cost calculation as the GA; no routing changes.
+    from network_sampling.sampling.random import intervention_length
+    lengths = [intervention_length(item, base.index) for item in population]
+    print(f"Initial intervention lengths (km): min={min(lengths)/1000:.2f}, mean={sum(lengths)/len(lengths)/1000:.2f}, max={max(lengths)/1000:.2f}", flush=True)
     needed = sum(archive[key]["fitness"] is None for key in fingerprints)
     print(f"Generation 0: {len(population)} individuals, {len(population)-needed} known, "
           f"{needed} new MATSim evaluations")
@@ -473,54 +480,64 @@ def report(state: dict, dataset: Path) -> None:
     print(f"  Generation manifest: {manifest}")
 
 
-def _score_current(state: dict, dataset: Path, *, penalize_failed: bool) -> int:
-    """Scoring never modifies MATSim outputs. Save each successful result to allow resume."""
-    ref = Path(state["reference"])
+def _score_current(state: dict, dataset: Path, *, penalize_failed: bool, workers: int = 1) -> int:
+    """Independent scenario processes; only the parent writes the checkpoint."""
+    if workers < 1:
+        raise ValueError('fitness workers must be positive')
+    ref = Path(state['reference'])
     mask = _mask_path(ref)
-    if _hash(ref) != state["reference_sha256"] or _hash(mask) != state["attachment_sha256"]:
-        raise ValueError("Fixed baseline sufficiency reference/attachments changed since init")
+    if _hash(ref) != state['reference_sha256'] or _hash(mask) != state['attachment_sha256']:
+        raise ValueError('Fixed baseline sufficiency reference/attachments changed since init')
+    spatial = Path(state['spatial_dir'])
+    validate_reference(ref, spatial)
     new = 0
-    for key in state["population"]:
-        entry = state["archive"][key]
-        if entry["fitness"] is not None:
+    tasks = []
+    for key in state['population']:
+        entry = state['archive'][key]
+        if entry['fitness'] is not None:
             continue
-        scenario = dataset / entry["scenario"]
+        scenario = dataset / entry['scenario']
         stage = _status_for(scenario)
-        if stage == "failed" and penalize_failed:
-            entry["fitness"] = -1.0
-            entry["error"] = "MATSim failed; explicitly penalized by operator"
+        if stage == 'failed' and penalize_failed:
+            entry['fitness'] = -1.0
+            entry['error'] = 'MATSim failed; explicitly penalized by operator'
             _write(dataset / STATE_FILE, state)
             new += 1
-            print(f"PENALIZE failed simulation: {scenario.name}")
+            print(f'PENALIZE failed simulation: {scenario.name}', flush=True)
             continue
-        if stage != "completed":
-            print(f"WAIT {scenario.name}: {stage}")
+        if stage != 'completed':
+            print(f'WAIT {scenario.name}: {stage}', flush=True)
             continue
-        status = _json(scenario / "run_status.json")
-        for field, expected in state["expected_simulation"].items():
+        status = _json(scenario / 'run_status.json')
+        for field, expected in state['expected_simulation'].items():
             if expected is not None and status.get(field) != expected:
-                raise ValueError(f"{scenario.name}: {field} differs from reference baseline MATSim")
-        try:
-            score = warm._evaluate(scenario, Path(state["spatial_dir"]), ref,
-                                   existing_only=False)
-            if score["fitness_version"] != FITNESS_VERSION:
-                raise ValueError("Incorrect fitness version in evaluated scenario")
-            fitness = float(score["fitness"])
-            if not math.isfinite(fitness):
-                raise ValueError("Non-finite fitness")
-        except (OSError, ValueError, RuntimeError, KeyError) as exc:
-            print(f"WAIT scoring {scenario.name}: {type(exc).__name__}: {exc}")
-            continue
-        entry["fitness"] = fitness
-        entry["raw_fitness"] = float(score["raw_fitness"])
-        entry["feasible"] = bool(score["feasible"])
-        entry["car_constraint"] = score["car_constraint"]
+                raise ValueError(f'{scenario.name}: {field} differs from reference baseline MATSim')
+        tasks.append((key, (scenario, spatial, ref, False)))
+    print(f'Scoring {len(tasks)} completed scenarios with {min(workers,len(tasks))} process(es)', flush=True)
+    def collect(key, result):
+        nonlocal new
+        score, error = result
+        scenario = state['archive'][key]['scenario']
+        if error is not None:
+            print(f'WAIT scoring {scenario}: {error}', flush=True)
+            return
+        fitness = float(score['fitness'])
+        if score['fitness_version'] != FITNESS_VERSION or not math.isfinite(fitness) or not 0 <= fitness <= 1:
+            raise ValueError('Invalid Trial 08 score')
+        entry = state['archive'][key]
+        entry.update(fitness=fitness, raw_fitness=fitness, feasible=True,
+                     car_constraint=score['car_constraint'], components=score['components'])
         _write(dataset / STATE_FILE, state)
         new += 1
-        print(f"SCORED {scenario.name}: fitness={fitness:.6f} "
-              f"(raw={score['raw_fitness']:.6f}, "
-              f"car_feasible={score['feasible']}, "
-              f"violation={score['car_constraint']['violation_pp']:.3f} pp)")
+        print(f'SCORED {scenario}: fitness={fitness:.8f}', flush=True)
+    if workers == 1 or len(tasks) <= 1:
+        for key, task in tasks:
+            collect(key, warm._score_worker(task))
+    else:
+        with ProcessPoolExecutor(max_workers=min(workers,len(tasks))) as pool:
+            futures = {pool.submit(warm._score_worker, task): key for key,task in tasks}
+            for future in as_completed(futures):
+                collect(futures[future], future.result())
     return new
 
 
@@ -572,10 +589,13 @@ def _offspring(state: dict, base, *, diagnostics: dict | None = None,
             else:
                 child = left
             if rng.random() < MUTATION_PROBABILITY:
-                child = mutate(child, eligible=base.eligible, network=base.network,
-                               index=base.index, budget_m=state["budget_m"],
-                               rng=rng, context=context, diagnostics=diagnostics)
-                label += "+local_mutation" if len(parents) > 1 else "local_mutation"
+                steps = rng.choice(MUTATION_STEPS)
+                for _ in range(steps):
+                    child = mutate(child, eligible=base.eligible, network=base.network,
+                                   index=base.index, budget_m=state["budget_m"],
+                                   rng=rng, context=context, diagnostics=diagnostics)
+                diagnostics["mutation_steps"] = diagnostics.get("mutation_steps", 0) + steps
+                label = ("spatial_crossover+" if len(parents) > 1 else "") + "local_mutation"
         except ValueError as exc:
             if str(exc) != "Cannot repair offspring with current operators":
                 raise
@@ -610,7 +630,7 @@ def _write_best(dataset: Path, state: dict) -> Path:
     ranked = [(item["fitness"], key, item) for key, item in state["archive"].items()
               if item["fitness"] is not None and item["fitness"] >= 0]
     if not ranked:
-        print("No feasible configurations to export (all failed or violated the car constraint).")
+        print("No feasible configurations to export (all evaluations failed).")
         return None
     score, key, item = max(ranked, key=lambda record: (record[0], record[1]))
     path = dataset / "optimization_best.json"
@@ -618,6 +638,7 @@ def _write_best(dataset: Path, state: dict) -> Path:
         "fitness": score, "config_hash": key, "fitness_version": FITNESS_VERSION,
         "source": item["source"], "scenario": item["scenario"],
         "historical_scenario": item.get("historical_scenario"),
+        "historical_path": item.get("historical_path"),
         "interventions": item["interventions"],
         "baseline_hashes": state["baseline_hashes"],
     })
@@ -664,6 +685,8 @@ def _write_history(dataset: Path, history: list[dict]) -> None:
         writer = csv.DictWriter(f, fieldnames=(
             "generation", "best_fitness", "mean_fitness", "unique_individuals",
             "evaluated_individuals", "new_simulations",
+            "mean_budget_km", "max_budget_km", "mean_segment_jaccard",
+            "failed_evaluations", "preflight_rejections",
         ))
         writer.writeheader()
         writer.writerows(history)
@@ -684,15 +707,31 @@ def advance(args: argparse.Namespace) -> None:
         print("Optimisation already completed.")
         report(state, dataset)
         return
-    _score_current(state, dataset, penalize_failed=args.penalize_failed)
+    _score_current(state, dataset, penalize_failed=args.penalize_failed, workers=args.fitness_workers)
     counts = _counts(state, dataset)
     if counts["scored"] != state["population_size"]:
         report(state, dataset)
         print("Generation incomplete. Submit/finish its manifest, then run 'step' again.")
         return
 
-    scores = [state["archive"][key]["fitness"] for key in state["population"]]
+    entries = [state['archive'][key] for key in state['population']]
+    scores = [entry['fitness'] for entry in entries]
+    segments = [{iv['segment_id'] for iv in entry['interventions']} for entry in entries]
+    similarities = [len(a & b)/len(a | b) if a | b else 1.0
+                    for i,a in enumerate(segments) for b in segments[i+1:]]
+    lengths = []
+    for entry in entries:
+        path = dataset / entry['scenario'] if entry['scenario'] else Path(entry['historical_path'])
+        value = entry.get('budget_used_m')
+        if value is None:
+            value = _json(path/'scenario.json')['budget_used_m']
+        lengths.append(float(value)/1000)
     summary = {
+        'mean_budget_km': sum(lengths)/len(lengths),
+        'max_budget_km': max(lengths),
+        'mean_segment_jaccard': sum(similarities)/len(similarities),
+        'failed_evaluations': sum(score < 0 for score in scores),
+        'preflight_rejections': state.get('preflight_stats', {}).get(str(state['generation']), {}).get('rejected',0),
         "generation": state["generation"],
         "best_fitness": max(scores),
         "mean_fitness": sum(scores) / len(scores),
@@ -709,8 +748,10 @@ def advance(args: argparse.Namespace) -> None:
         state["history"].append(summary)
     _write_history(dataset, state["history"])
     _write_operator_outcomes(dataset, state["archive"])
+    _write_best(dataset, state)
     print(f"Completed generation {state['generation']}: best={summary['best_fitness']:.6f}, "
-          f"mean={summary['mean_fitness']:.6f}")
+          f"mean={summary['mean_fitness']:.6f}; mean budget={summary['mean_budget_km']:.2f} km; "
+          f"mean segment Jaccard={summary['mean_segment_jaccard']:.3f}", flush=True)
     if state["generation"] + 1 == state["generations"]:
         state["phase"] = "complete"
         _write(state_path, state)
@@ -777,6 +818,7 @@ def main() -> None:
                       help="Only for local tests: skip authoritative Java preflight")
     status = sub.add_parser("status", help="Read checkpoint and scenario completion")
     step = sub.add_parser("step", help="Score completed jobs and prepare next generation")
+    step.add_argument("--fitness-workers", type=int, default=1)
     step.add_argument("--penalize-failed", action="store_true",
                       help="Explicitly assign a low score to failed MATSim jobs")
     for p in (init, status, step):
