@@ -6,17 +6,17 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --time=24:00:00
+#SBATCH --time=36:00:00
 #SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_retrain_%j.out
 #SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/gnn_retrain_%j.err
 set -Eeuo pipefail
 
 PROJECT_ROOT=/vast.mnt/home/20201733/Master_Thesis
-GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt_delay_expanded_v2}"
+GNN_DATA="${GNN_DATA:-/vast.mnt/home/20201733/locarno_ETH_Model/gnn_training_tt_delay_expanded_v3}"
 VENV="${VENV:-/vast.mnt/home/20201733/Master_Thesis/.venv-gnn}"
 EPOCHS="${EPOCHS:-150}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
-RUN_TAG="${RUN_TAG:-tt_delay_001}"
+RUN_TAG="${RUN_TAG:-tt_delay_trial08_added}"
 RUN_DIR="$GNN_DATA/runs/$RUN_TAG"
 
 module purge
