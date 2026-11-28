@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=40G
 #SBATCH --time=24:00:00
-#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/ga-trial08-overnight_%j.out
-#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis/slurm_logs/ga-trial08-overnight_%j.err
+#SBATCH --output=/vast.mnt/home/20201733/Master_Thesis_trial08/slurm_logs/ga-trial08-overnight_%j.out
+#SBATCH --error=/vast.mnt/home/20201733/Master_Thesis_trial08/slurm_logs/ga-trial08-overnight_%j.err
 
 set -Eeuo pipefail
 source "$SLURM_SUBMIT_DIR/hpc/GA_optimization/hpc_config.sh"
